@@ -1,0 +1,45 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-table-eating-plan
+      author: Sof
+      comment: firth liquibase migration
+      changes:
+        - createTable:
+            tableName: eating_plan
+            columns:
+              - column:
+                  name: plan_id
+                  type: int
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: recipe_id
+                  type: int
+              - column:
+                  name: date
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: type
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: number_of_people
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            baseTableName: eating_plan
+            baseColumnNames: recipe_id
+            referencedTableName: recipes
+            referencedColumnNames: recipe_id
+            constraintName: eating_plan_recipes_fk
