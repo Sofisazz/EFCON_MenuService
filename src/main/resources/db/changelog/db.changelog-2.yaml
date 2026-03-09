@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-table-recipe-ingredients
+      author: Sof
+      comment: second liquibase migration
+      changes:
+        - createTable:
+            tableName: recipe_ingredients
+            columns:
+              - column:
+                  name: recipe_id
+                  type: int
+              - column:
+                  name: ingredient
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            baseTableName: recipe_ingredients
+            baseColumnNames: recipe_id
+            referencedTableName: recipes
+            referencedColumnNames: recipe_id
+            constraintName: recipe_ingredients_recipes_fk
