@@ -9,6 +9,7 @@ import org.mapstruct.MappingTarget;
 @Mapper(componentModel = "spring", uses = {RecipeMapper.class})
 public interface EatingPlanMapper {
 
+    @Mapping(target = "userId", ignore = true)
     EatingPlan toEntity(EatingPlanDto eatingPlanDto);
 
     @Mapping(target = "recipeId", expression = "java(eatingPlan.getRecipe().getId())")
@@ -16,5 +17,6 @@ public interface EatingPlanMapper {
 
     @Mapping(target = "id",ignore = true)
     @Mapping(target = "recipe", ignore = true)
+    @Mapping(target = "userId", ignore = true)
     void updateFromDto(EatingPlanDto eatingPlanDto, @MappingTarget EatingPlan eatingPlan);
 }

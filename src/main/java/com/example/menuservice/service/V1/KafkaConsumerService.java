@@ -1,4 +1,4 @@
-package com.example.menuservice.service;
+package com.example.menuservice.service.V1;
 
 import com.example.menuservice.dto.KafkaProductDto;
 import com.example.menuservice.dto.RecipeDto;

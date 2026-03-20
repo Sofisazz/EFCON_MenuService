@@ -42,4 +42,8 @@ public class EatingPlan {
     @ManyToOne
     @JoinColumn(name = "recipe_id")
     private Recipe recipe;
+
+    @NotNull(message = "Id пользователя обязателен")
+    @Column(name = "user_id", nullable = false)
+    private Integer userId;
 }
