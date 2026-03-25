@@ -34,3 +34,28 @@ eureka:
       defaultZone: http://localhost:9090/eureka/
   instance:
     prefer-ip-address: true
+
+
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      registerHealthIndicator: true
+      slidingWindowSize: 10
+      minimumNumberOfCalls: 5
+      permittedNumberOfCallsInHalfOpenState: 3
+      automaticTransitionFromOpenToHalfOpenEnabled: true
+      failureRateThreshold: 50
+      waitDurationInOpenState: 10000
+      eventConsumerBufferSize: 10
+      ignoreExceptions:
+        - com.example.menuservice.exceptions.MissingException
+        - feign.FeignException$BadRequest
+  instances:
+    userService:
+      baseConfig: default
+      waitDurationInOpenState: 15s
+      failureRateThreshold: 60
+    inventoryService:
+      baseConfig: default
+      waitDurationInOpenState: 15s
+      failureRateThreshold: 60

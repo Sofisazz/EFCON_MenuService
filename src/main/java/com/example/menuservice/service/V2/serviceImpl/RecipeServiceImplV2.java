@@ -5,6 +5,7 @@ import com.example.menuservice.dto.*;
 import com.example.menuservice.dto.mapping.RecipeIngredientMapper;
 import com.example.menuservice.dto.mapping.RecipeMapper;
 import com.example.menuservice.entity.EatingPlan;
+import com.example.menuservice.entity.PlanItem;
 import com.example.menuservice.entity.Recipe;
 import com.example.menuservice.entity.RecipeIngredient;
 import com.example.menuservice.enums.Measure;
@@ -14,9 +15,12 @@ import com.example.menuservice.exceptions.UpdateException;
 import com.example.menuservice.feignclient.InventoryClient;
 import com.example.menuservice.feignclient.UserClient;
 import com.example.menuservice.map.AllergenMap;
+import com.example.menuservice.repository.PlanItemRepository;
 import com.example.menuservice.repository.RecipeRepository;
 import com.example.menuservice.service.V2.RecipeServiceV2;
-import feign.FeignException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -25,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.*;
+import java.util.function.Supplier;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -32,20 +37,21 @@ import java.util.*;
 public class RecipeServiceImplV2 implements RecipeServiceV2 {
 
     private final RecipeRepository recipeRepository;
+    private final PlanItemRepository planItemRepository;
     private final RecipeMapper recipeMapper;
     private final RecipeIngredientMapper recipeIngredientMapper;
 
     private final InventoryClient inventoryClient;
     private final UserClient userClient;
 
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+
     private final AllergenMap allergenMap;
 
 
     @Override
     public List<RecipeDto> getAllRecipes(int userId) {
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
         List<RecipeDto> recipes;
         recipes = recipeRepository.findByOwnerIdOrOwnerIdIsNull(userId)
@@ -57,42 +63,33 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
 
     @Override
     public RecipeDto getRecipeById(int id, int userId) {
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
         Recipe recipe = recipeRepository.findById(id)
                 .orElseThrow(() -> new MissingException("Рецепт с id '" + id + "' не существует"));
 
 
         if (recipe.getOwnerId() != null && !recipe.getOwnerId().equals(userId)) {
-            throw new MissingException("Рецепт с id '" + id + "' не существует");
+            throw new MissingException("Рецепт с id '" + id + "' не существует для пользователя с id '" + userId + "'");
         }
         return recipeMapper.toDto(recipe);
     }
 
     @Override
     public List<RecipeDto> generateRecipesAccordingRestrictions(PageRequest pageable, int userId) {
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
         return generateRecipes(userId);
     }
 
     @Override
     public List<RecipeDto> getRecipesSortedByExpiringIngredients(int userId) {
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
-        List<TransferProductDto> expiringProducts;
-        try {
-            expiringProducts = inventoryClient.getExpiring(userId);
-        } catch (FeignException e) {
-            throw new MissingException("Сервис склада недоступен");
-        }
+        List<TransferProductDto> expiringProducts = circuitBreakerGetExpiring(userId);
 
+        Optional.ofNullable(expiringProducts)
+                .orElseThrow(() -> new MissingException("Нет связи с inventory сервером"));
 
         if (expiringProducts.isEmpty()) {
             List<Recipe> recipes = recipeRepository.findByOwnerIdIsNullOrOwnerId(userId);
@@ -136,9 +133,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
 
     @Override
     public ShoppingListDto getShoppingListForRecipe(int recipeId, int userId) {
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
         Recipe recipe = recipeRepository.findById(recipeId)
                 .orElseThrow(() -> new MissingException("Рецепт с id '" + recipeId + "' не существует"));
@@ -153,13 +148,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
             return createShoppingList(recipe, List.of());
         }
         List<String> ingredientsNames = ingredients.stream().map(RecipeIngredient::getName).toList();
-        List<ProductStatusDto> allStatuses;
-
-        try {
-            allStatuses = inventoryClient.generateShoppingList(userId, ingredientsNames);
-        } catch (FeignException e) {
-            throw new MissingException("Сервис склада недоступен");
-        }
+        List<ProductStatusDto> allStatuses = circuitBreakerGenerateShoppingList(ingredientsNames, userId);
 
         List<ProductStatusDto> needToBuy = new ArrayList<>();
         for (RecipeIngredient ingredient : ingredients) {
@@ -205,9 +194,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
     @Transactional
     @Override
     public RecipeDto createRecipeV2(RecipeDto recipeDto, Integer userId) {
-        if (userId != null && !userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не существует");
-        }
+        circuitBreakerUserExists(userId);
 
         String name = recipeDto.getName();
 
@@ -263,9 +250,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
             return;
         }
 
-        if (!userClient.checkUserExists(userId)) {
-            throw new MissingException("Пользователь с id '" + userId + "' не найден");
-        }
+        circuitBreakerUserExists(userId);
 
         if (recipe.getOwnerId() == null) {
             throw new ExistsException("Невозможно удалить рецепт из глобальной базы. Вы можете удалить только свои личные рецепт");
@@ -291,9 +276,8 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
                 throw new ExistsException("Разработчик может изменять только глобальные рецепты");
             }
         } else {
-            if (!userClient.checkUserExists(userId)) {
-                throw new MissingException("Пользователь с id '" + userId + "' не найден");
-            }
+            circuitBreakerUserExists(userId);
+
             if (existingRecipe.getOwnerId() == null) {
                 throw new ExistsException("Пользователи не могут изменять глобальные рецепты.");
             }
@@ -368,7 +352,8 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
     }
 
     private List<RecipeDto> generateRecipes(int userId){
-        UserRestrictionsDto user = userClient.getUserRestrictions(userId);
+        UserRestrictionsDto user = circuitBreakerGetUserRestrictions(userId);
+
         List<Recipe> existingRecipes = recipeRepository.findByOwnerIdOrOwnerIdIsNull(userId);
         List<Recipe> filteredRecipes = filterRecipes(existingRecipes, user);
         List<RecipeDto> newRecipes;
@@ -458,17 +443,62 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
     }
 
     private void notifyAboutConnectedPlans(Recipe recipe) {
-        List<EatingPlan> eatingPlans = recipe.getEatingPlan();
-        List<String> deletePlans = new ArrayList<>();
+        List<PlanItem> planItems = planItemRepository.findByRecipeId(recipe.getId());
 
-        if (eatingPlans != null) {
-            for (EatingPlan plan : eatingPlans) {
-                deletePlans.add("id: " + plan.getId() + ": " + plan.getType());
-            }
+        if (planItems.isEmpty()) {
+            return;
         }
 
-        if (!deletePlans.isEmpty()) {
-            throw new ExistsException("Для удаления рецепта удалите план питания или назначьте другой рецепт "+ deletePlans);
+        List<String> connectedPlansInfo = new ArrayList<>();
+
+        for (PlanItem item : planItems) {
+            EatingPlan plan = item.getEatingPlan();
+            connectedPlansInfo.add("План id '" + plan.getId() + ": " + plan.getType() + " от " +plan.getDate());
+        }
+
+        throw new ExistsException("Невозможно удалить рецепт '" + recipe.getName() + "', так как он включен в следующие планы питания: \n" + String.join(", ", connectedPlansInfo) + ". Сначала удалите рецепт из этих планов или отмените планы");
+    }
+
+    private void circuitBreakerUserExists(Integer userId){
+        boolean exists = executeWithCircuitBreaker("userService", () -> userClient.checkUserExists(userId));
+
+        if (!exists) {
+            throw new MissingException("Пользователя с id '" + userId + "' не существует");
+        }
+    }
+
+    private UserRestrictionsDto circuitBreakerGetUserRestrictions(int userId) {
+
+        return executeWithCircuitBreaker("userService", () -> userClient.getUserRestrictions(userId));
+    }
+
+    private List<ProductStatusDto> circuitBreakerGenerateShoppingList(List<String> ingredientsNames, int userId) {
+
+        return executeWithCircuitBreaker("inventoryService", () -> inventoryClient.generateShoppingList(userId, ingredientsNames));
+    }
+
+    private List<TransferProductDto> circuitBreakerGetExpiring(int userId) {
+
+        return executeWithCircuitBreaker("inventoryService", () -> inventoryClient.getExpiring(userId));
+    }
+
+    private <T> T executeWithCircuitBreaker(String circuitBreakerName, Supplier<T> supplier) {
+        CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker(circuitBreakerName);
+        Supplier<T> decoratedSupplier = CircuitBreaker.decorateSupplier(cb, supplier);
+
+        try {
+            return decoratedSupplier.get();
+        } catch (CallNotPermittedException e) {
+
+            log.warn("Circuit Breaker '{}' разомкнут. Сервис недоступен", circuitBreakerName);
+            throw new MissingException(circuitBreakerName + " временно недоступен");
+        } catch (MissingException e) {
+
+            throw e;
+        } catch (Exception e) {
+
+            log.error("Ошибка при вызове сервиса через CB '{}': {}", circuitBreakerName, e.getMessage(), e);
+            throw new MissingException("Ошибка связи с " + circuitBreakerName);
         }
     }
 }

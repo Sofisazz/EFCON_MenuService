@@ -1,6 +1,7 @@
 package com.example.menuservice.controller.V2;
 
 import com.example.menuservice.dto.EatingPlanDto;
+import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.ShoppingListDto;
 import com.example.menuservice.enums.Status;
 import com.example.menuservice.service.V2.EatingPlanServiceV2;
@@ -11,6 +12,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RequiredArgsConstructor
 @RestController
@@ -75,5 +78,10 @@ public class EatingPlanControllerV2 {
     public void DeleteEatingPlan(@PathVariable int id,
                                  @RequestParam int userId) {
         eatingPlanService.deleteEatingPlan(id, userId);
+    }
+
+    @GetMapping("/recipes")
+    public List<RecipeDto> generateRecipes(@RequestParam int userId) {
+        return eatingPlanService.generateRecipes(userId);
     }
 }

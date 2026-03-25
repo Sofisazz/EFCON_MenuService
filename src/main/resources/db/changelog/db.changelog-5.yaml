@@ -1,14 +1,14 @@
 databaseChangeLog:
   - changeSet:
-      id: create-table-eating-plan
+      id: create-table-plan-items
       author: Sof
-      comment: firth liquibase migration
+      comment: fifth liquibase migration
       changes:
         - createTable:
-            tableName: eating_plan
+            tableName: plan_items
             columns:
               - column:
-                  name: plan_id
+                  name: item_id
                   type: int
                   autoIncrement: true
                   constraints:
@@ -17,29 +17,26 @@ databaseChangeLog:
               - column:
                   name: recipe_id
                   type: int
-              - column:
-                  name: date
-                  type: date
                   constraints:
                     nullable: false
               - column:
-                  name: type
-                  type: varchar(20)
-                  constraints:
-                    nullable: false
-              - column:
-                  name: status
-                  type: varchar(20)
-                  constraints:
-                    nullable: false
-              - column:
-                  name: user_id
+                  name: plan_id
                   type: int
+              - column:
+                  name: portions
+                  type: int
+                  defaultValueNumeric: 1
                   constraints:
                     nullable: false
         - addForeignKeyConstraint:
             baseTableName: eating_plan
+            baseColumnNames: plan_id
+            referencedTableName: plan_items
+            referencedColumnNames: plan_id
+            constraintName: eating_plan_items_fk
+        - addForeignKeyConstraint:
+            baseTableName: recipes
             baseColumnNames: recipe_id
-            referencedTableName: recipes
-            referencedColumnNames: recipe_id
-            constraintName: eating_plan_recipes_fk
+            referencedTableName: plan_items
+            referencedColumnNames: plan_id
+            constraintName: recipes_plan_items_fk

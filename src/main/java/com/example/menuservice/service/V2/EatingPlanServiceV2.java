@@ -1,10 +1,13 @@
 package com.example.menuservice.service.V2;
 
 import com.example.menuservice.dto.EatingPlanDto;
+import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.ShoppingListDto;
 import com.example.menuservice.enums.Status;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+
+import java.util.List;
 
 
 public interface EatingPlanServiceV2 {
@@ -23,4 +26,5 @@ public interface EatingPlanServiceV2 {
 
     boolean existEatingPlanWithRecipe(int id, int recipeId, int userId);
 
+    List<RecipeDto> generateRecipes(int userId);
 }

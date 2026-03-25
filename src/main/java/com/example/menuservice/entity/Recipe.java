@@ -44,9 +44,6 @@ public class Recipe {
     @Column(name = "description")
     private Map<Integer, String> steps;
 
-    @OneToMany(mappedBy = "recipe")
-    private List<EatingPlan> eatingPlan;
-
     private double caloriesFor100;
 
     @ColumnDefault("0.0")

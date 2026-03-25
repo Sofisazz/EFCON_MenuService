@@ -5,7 +5,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
-import java.util.Optional;
 
 @Repository
 public interface RecipeRepository extends JpaRepository<Recipe, Integer> {
@@ -23,8 +22,6 @@ public interface RecipeRepository extends JpaRepository<Recipe, Integer> {
     Recipe findByNameAndOwnerId(String name, Integer userId);
 
     boolean existsByNameAndOwnerIdIsNotNull(String name);
-
-    Optional<Recipe> findByIdAndOwnerIdIsNullOrOwnerId(int id, int userId);
 
     List<Recipe> findByOwnerIdIsNullOrOwnerId(int userId);
 }

@@ -8,6 +8,8 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "eating_plan")
@@ -29,21 +31,23 @@ public class EatingPlan {
     @Column(nullable = false)
     private EatingType type;
 
-    @NotNull(message = "Количество человек обязательно")
-    @Column(nullable = false)
-    private Integer numberOfPeople;
 
     @NotNull(message = "Статус обязателен")
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Status status;
 
-    @NotNull(message = "Рецепт обязатателен")
-    @ManyToOne
-    @JoinColumn(name = "recipe_id")
-    private Recipe recipe;
+    @OneToMany(mappedBy = "eatingPlan", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<PlanItem> planItems = new ArrayList<>();
 
     @NotNull(message = "Id пользователя обязателен")
     @Column(name = "user_id", nullable = false)
     private Integer userId;
+
+    public void addPlanItem(Recipe recipe, int portions) {
+        PlanItem item = new PlanItem(recipe, portions);
+        item.setEatingPlan(this);
+        this.planItems.add(item);
+    }
+
 }
