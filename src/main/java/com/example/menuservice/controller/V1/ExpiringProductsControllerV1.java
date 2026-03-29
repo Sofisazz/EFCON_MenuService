@@ -1,7 +1,7 @@
-package com.example.menuservice.controller;
+package com.example.menuservice.controller.V1;
 
 import com.example.menuservice.dto.RecipeDto;
-import com.example.menuservice.service.KafkaConsumerService;
+import com.example.menuservice.service.V1.KafkaConsumerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

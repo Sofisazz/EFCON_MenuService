@@ -1,4 +1,4 @@
-package com.example.menuservice.service.serviceImpl;
+package com.example.menuservice.service.V1.serviceImpl;
 
 import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.mapping.RecipeMapper;
@@ -8,7 +8,7 @@ import com.example.menuservice.exceptions.ExistsException;
 import com.example.menuservice.exceptions.MissingException;
 import com.example.menuservice.exceptions.UpdateException;
 import com.example.menuservice.repository.RecipeRepository;
-import com.example.menuservice.service.RecipeService;
+import com.example.menuservice.service.V1.RecipeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -91,5 +91,4 @@ public class RecipeServiceImpl implements RecipeService {
             }
         }
     }
-
 }

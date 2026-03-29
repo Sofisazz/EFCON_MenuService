@@ -1,6 +1,7 @@
 package com.example.menuservice.comparator;
 
 import com.example.menuservice.dto.RecipeDto;
+import com.example.menuservice.dto.RecipeIngredientDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -9,7 +10,7 @@ import java.util.Set;
 
 @RequiredArgsConstructor
 @Component
-public class RecipesComparator implements Comparator<RecipeDto> {
+public class RecipesNameComparator implements Comparator<RecipeDto> {
 
     private final Set<String> expiringNames;
 
@@ -27,8 +28,8 @@ public class RecipesComparator implements Comparator<RecipeDto> {
         }
 
         int count = 0;
-        for (String ingredient : recipe.getIngredients()) {
-            if (expiringNames.contains(ingredient)) {
+        for (RecipeIngredientDto ingredient : recipe.getIngredients()) {
+            if (expiringNames.contains(ingredient.getName())) {
                 count++;
             }
         }

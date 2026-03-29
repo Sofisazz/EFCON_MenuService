@@ -1,7 +1,6 @@
-package com.example.menuservice.service.serviceImpl;
+package com.example.menuservice.service.V1.serviceImpl;
 
-import com.example.menuservice.dto.EatingPlanDto;
-import com.example.menuservice.dto.RecipeDto;
+import com.example.menuservice.dto.*;
 import com.example.menuservice.dto.mapping.EatingPlanMapper;
 import com.example.menuservice.dto.mapping.RecipeMapper;
 import com.example.menuservice.entity.EatingPlan;
@@ -12,7 +11,7 @@ import com.example.menuservice.exceptions.ExistsException;
 import com.example.menuservice.exceptions.MissingException;
 import com.example.menuservice.repository.EatingPlanRepository;
 import com.example.menuservice.repository.RecipeRepository;
-import com.example.menuservice.service.EatingPlanService;
+import com.example.menuservice.service.V1.EatingPlanService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -28,6 +27,7 @@ public class EatingPlanServiceImpl implements EatingPlanService {
 
     private final EatingPlanRepository eatingPlanRepository;
     private final RecipeRepository recipeRepository;
+
     private final EatingPlanMapper eatingPlanMapper;
     private final RecipeMapper recipeMapper;
 
@@ -112,4 +112,8 @@ public class EatingPlanServiceImpl implements EatingPlanService {
         return recipeRepository.findById(recipeId)
                 .orElseThrow(() -> new MissingException("Рецепта с id '" + recipeId + "' не существует"));
     }
+
+
+
+
 }

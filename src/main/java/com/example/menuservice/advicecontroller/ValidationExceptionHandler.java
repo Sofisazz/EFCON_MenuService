@@ -3,11 +3,13 @@ package com.example.menuservice.advicecontroller;
 import com.example.menuservice.exceptions.ExistsException;
 import com.example.menuservice.exceptions.MissingException;
 import com.example.menuservice.exceptions.UpdateException;
+import feign.FeignException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -15,6 +17,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 @SuppressWarnings("unused")
 @RestControllerAdvice
@@ -70,4 +73,18 @@ public class ValidationExceptionHandler {
         return new ResponseEntity<>(ex.getMessage(), HttpStatus.BAD_REQUEST);
     }
 
+    @ExceptionHandler(FeignException.class)
+    public ResponseEntity<String> handleFeignException(FeignException ex) {
+        String errorMessage = ex.contentUTF8();
+
+        errorMessage = Optional.ofNullable(errorMessage)
+                .orElseThrow(() -> new MissingException("Ошибка при обращении к сервису пользователей: " + ex.status()));
+
+        return ResponseEntity.status(ex.status()).body(errorMessage);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<String> MissingServletRequestParameterException(MissingServletRequestParameterException ex) {
+        return new ResponseEntity<>(ex.getMessage(), HttpStatus.BAD_REQUEST);
+    }
 }

@@ -8,13 +8,30 @@ databaseChangeLog:
             tableName: recipe_ingredients
             columns:
               - column:
-                  name: recipe_id
+                  name: ingredient_id
                   type: int
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
               - column:
-                  name: ingredient
+                  name: name
                   type: varchar(255)
                   constraints:
                     nullable: false
+              - column:
+                  name: quantity
+                  type: decimal(10, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: unit
+                  type: varchar(5)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: recipe_id
+                  type: int
         - addForeignKeyConstraint:
             baseTableName: recipe_ingredients
             baseColumnNames: recipe_id

@@ -2,6 +2,8 @@ server:
   port: 8087
 
 spring:
+  application:
+    name: menu-service
   datasource:
     url: jdbc:postgresql://localhost:5434/menu_service
     username: postgres
@@ -25,3 +27,35 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:9090/eureka/
+  instance:
+    prefer-ip-address: true
+
+
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      registerHealthIndicator: true
+      slidingWindowSize: 10
+      minimumNumberOfCalls: 5
+      permittedNumberOfCallsInHalfOpenState: 3
+      automaticTransitionFromOpenToHalfOpenEnabled: true
+      failureRateThreshold: 50
+      waitDurationInOpenState: 10000
+      eventConsumerBufferSize: 10
+      ignoreExceptions:
+        - com.example.menuservice.exceptions.MissingException
+        - feign.FeignException$BadRequest
+  instances:
+    userService:
+      baseConfig: default
+      waitDurationInOpenState: 15s
+      failureRateThreshold: 60
+    inventoryService:
+      baseConfig: default
+      waitDurationInOpenState: 15s
+      failureRateThreshold: 60

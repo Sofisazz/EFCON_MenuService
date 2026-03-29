@@ -1,8 +1,8 @@
-package com.example.menuservice.controller;
+package com.example.menuservice.controller.V1;
 
 
 import com.example.menuservice.dto.RecipeDto;
-import com.example.menuservice.service.RecipeService;
+import com.example.menuservice.service.V1.RecipeService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

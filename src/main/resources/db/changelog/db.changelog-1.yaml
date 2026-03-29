@@ -19,7 +19,6 @@ databaseChangeLog:
                   type: varchar(200)
                   constraints:
                     nullable: false
-                    unique: true
               - column:
                   name: caloriesFor100
                   type: decimal(10, 2)
@@ -28,7 +27,13 @@ databaseChangeLog:
                   type: decimal(10, 2)
               - column:
                   name: fats
-                  type: varchar(100)
+                  type: decimal(10, 2)
               - column:
                   name: carbohydrates
                   type: decimal(10, 2)
+              - column:
+                  name: owner_id
+                  type: int
+              - column:
+                  name: serving
+                  type: int

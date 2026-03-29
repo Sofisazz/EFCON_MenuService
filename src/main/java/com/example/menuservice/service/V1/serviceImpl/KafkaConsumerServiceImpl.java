@@ -1,12 +1,13 @@
-package com.example.menuservice.service.serviceImpl;
+package com.example.menuservice.service.V1.serviceImpl;
 
-import com.example.menuservice.comparator.RecipesComparator;
+import com.example.menuservice.comparator.RecipesNameComparator;
 import com.example.menuservice.dto.KafkaProductDto;
 import com.example.menuservice.dto.RecipeDto;
+import com.example.menuservice.dto.RecipeIngredientDto;
 import com.example.menuservice.dto.mapping.RecipeMapper;
 import com.example.menuservice.exceptions.MissingException;
 import com.example.menuservice.repository.RecipeRepository;
-import com.example.menuservice.service.KafkaConsumerService;
+import com.example.menuservice.service.V1.KafkaConsumerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
@@ -49,9 +50,9 @@ public class KafkaConsumerServiceImpl implements KafkaConsumerService {
         for (RecipeDto recipe : allRecipes) {
             boolean hasMatch = false;
 
-            for (String ingredient : recipe.getIngredients()) {
+            for (RecipeIngredientDto ingredient : recipe.getIngredients()) {
                 if (!hasMatch) {
-                    if (expiringNames.contains(ingredient)) {
+                    if (expiringNames.contains(ingredient.getName())) {
                         hasMatch = true;
                     }
                 }
@@ -62,7 +63,7 @@ public class KafkaConsumerServiceImpl implements KafkaConsumerService {
             }
         }
 
-        matchingRecipes.sort(new RecipesComparator(expiringNames));
+        matchingRecipes.sort(new RecipesNameComparator(expiringNames));
 
         return matchingRecipes;
     }
