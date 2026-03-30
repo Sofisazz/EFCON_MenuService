@@ -18,6 +18,7 @@ import com.example.menuservice.map.AllergenMap;
 import com.example.menuservice.repository.EatingPlanRepository;
 import com.example.menuservice.repository.RecipeRepository;
 import com.example.menuservice.service.V2.EatingPlanServiceV2;
+import com.example.menuservice.service.V2.KafkaProducerService;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -49,6 +50,8 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
     private final InventoryClient inventoryClient;
 
     private final CircuitBreakerRegistry circuitBreakerRegistry;
+
+    private final KafkaProducerService kafkaProducerService;
 
     @Override
     public Page<EatingPlanDto> findAllEatingPlansForUser(PageRequest pageable, int userId) {
@@ -107,7 +110,13 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         UserRestrictionsDto userRestrictions = circuitBreakerGetUserRestrictions(userId);
 
         EatingPlan receivedEatingPlan = eatingPlanMapper.toEntity(eatingPlanDto);
-        receivedEatingPlan.setStatus(Status.CREATED);
+
+        if(eatingPlanDto.getStatus().equals(Status.OUTSIDE)) {
+            receivedEatingPlan.setStatus(Status.OUTSIDE);
+        } else {
+            receivedEatingPlan.setStatus(Status.CREATED);
+        }
+
         receivedEatingPlan.setUserId(userId);
 
         for (PlanItemDto itemDto : items) {
@@ -129,13 +138,19 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
                 throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
             }
 
-            checkAvailability(userId, recipe, itemDto.getPortions(), recipe.getServing());
+            if (receivedEatingPlan.getStatus().equals(Status.CREATED)) {
+                checkAvailability(userId, recipe, itemDto.getPortions(), recipe.getServing());
+            }
 
             receivedEatingPlan.addPlanItem(recipe, itemDto.getPortions());
         }
 
         eatingPlanRepository.save(receivedEatingPlan);
-        subtractIngredientsFromInventory(receivedEatingPlan, userId);
+
+        if (receivedEatingPlan.getStatus().equals(Status.CREATED)) {
+            List<ConsumeProductDto> products = ingredientsFromInventory(receivedEatingPlan, userId);
+            products.forEach(kafkaProducerService::sendEatenProducts);
+        }
 
         return eatingPlanMapper.toDto(receivedEatingPlan);
     }
@@ -161,8 +176,9 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         existingPlan.setDate(eatingPlanDto.getDate());
         existingPlan.setType(eatingPlanDto.getType());
 
-        if (existingPlan.getPlanItems() != null && !existingPlan.getPlanItems().isEmpty()) {
-            returnIngredientsToInventory(existingPlan, userId);
+        if (existingPlan.getPlanItems() != null && !existingPlan.getPlanItems().isEmpty() && eatingPlanDto.getStatus() != Status.OUTSIDE) {
+            List<ConsumeProductDto> products = ingredientsFromInventory(existingPlan, userId);
+            products.forEach(kafkaProducerService::sendReturnedProducts);
         }
 
         List<PlanItemDto> newItems = eatingPlanDto.getItems();
@@ -172,6 +188,7 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
         UserRestrictionsDto user = circuitBreakerGetUserRestrictions(userId);
 
+        existingPlan.getPlanItems().clear();
         for (PlanItemDto itemDto : newItems) {
             Recipe recipe = recipeRepository.findById(itemDto.getRecipeId())
                     .orElseThrow(() -> new MissingException("Рецепт не найден"));
@@ -181,7 +198,10 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
                 throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
             }
 
-            checkAvailability(userId, recipe, itemDto.getPortions(), recipe.getServing());
+            if (eatingPlanDto.getStatus() != Status.OUTSIDE) {
+                checkAvailability(userId, recipe, itemDto.getPortions(), recipe.getServing());
+            }
+
             existingPlan.addPlanItem(recipe, itemDto.getPortions());
         }
 
@@ -189,7 +209,11 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
             existingPlan.setStatus(Status.CREATED);
         }
 
-        subtractIngredientsFromInventory(existingPlan, userId);
+        if (eatingPlanDto.getStatus() != Status.OUTSIDE) {
+            List<ConsumeProductDto> products = ingredientsFromInventory(existingPlan, userId);
+            products.forEach(kafkaProducerService::sendEatenProducts);
+        }
+
         eatingPlanRepository.save(existingPlan);
 
         return eatingPlanMapper.toDto(existingPlan);
@@ -202,8 +226,9 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
         EatingPlan plan = eatingPlanRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new MissingException("План питания с id '" + id + "' не найден у пользователя с id '" + userId +"'"));
-        if (plan.getStatus() != Status.CONSUMED) {
-            returnIngredientsToInventory(plan, userId);
+        if (plan.getStatus() != Status.CONSUMED && plan.getStatus() != Status.OUTSIDE) {
+            List<ConsumeProductDto> products = ingredientsFromInventory(plan, userId);
+            products.forEach(kafkaProducerService::sendReturnedProducts);
         }
 
         eatingPlanRepository.deleteById(id);
@@ -223,6 +248,10 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
             throw new MissingException("План питания на " + oldStatus + ": " + receivedEatingPlan.getDate() + " уже съеден. Отменить нельзя");
         }
 
+        if (status.equals(Status.CANCELLED) && oldStatus.equals(Status.IN_PROGRESS)) {
+            throw new MissingException("План питания на " + oldStatus + ": " + receivedEatingPlan.getDate() + " готовится. Отменить нельзя");
+        }
+
         if (!status.equals(Status.CANCELLED)) {
             boolean isSlotOccupied = eatingPlanRepository.existsByDateAndTypeAndUserIdAndIdNotAndStatusNot(receivedEatingPlan.getDate(), receivedEatingPlan.getType(), userId, id, Status.CANCELLED);
 
@@ -234,7 +263,18 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         receivedEatingPlan.setStatus(status);
 
         if (status.equals(Status.CANCELLED)) {
-            returnIngredientsToInventory(receivedEatingPlan, userId);
+            if (oldStatus != Status.OUTSIDE){
+                List<ConsumeProductDto> products = ingredientsFromInventory(receivedEatingPlan, userId);
+                products.forEach(kafkaProducerService::sendReturnedProducts);
+            }
+        }  else if (status.equals(Status.CREATED) || status.equals(Status.IN_PROGRESS) || status.equals(Status.CONSUMED)) {
+
+            for (PlanItem item : receivedEatingPlan.getPlanItems()) {
+                checkAvailability(userId, item.getRecipe(), item.getPortions(), item.getRecipe().getServing());
+            }
+
+            List<ConsumeProductDto> products = ingredientsFromInventory(receivedEatingPlan, userId);
+            products.forEach(kafkaProducerService::sendEatenProducts);
         }
 
         eatingPlanRepository.save(receivedEatingPlan);
@@ -329,7 +369,9 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         return newRecipes ;
     }
 
-    private void subtractIngredientsFromInventory(EatingPlan plan, int userId) {
+    private List<ConsumeProductDto> ingredientsFromInventory(EatingPlan plan, int userId) {
+        List<ConsumeProductDto> products = new ArrayList<>();
+
         for (PlanItem item : plan.getPlanItems()) {
             Recipe recipe = item.getRecipe();
             int portions = item.getPortions();
@@ -339,9 +381,12 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
                 double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
 
                 ConsumeProductDto product = createConsumeProductDto(userId, ingredient, realAmountUsed);
-                circuitBreakerConsumeProduct(product);
+                products.add(product);
+
             }
         }
+
+        return products;
     }
 
     private ProductStatusDto createProductStatusDto(RecipeIngredient ingredient, double needed) {
@@ -539,23 +584,6 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         }
     }
 
-    private void returnIngredientsToInventory(EatingPlan plan, int userId) {
-        for (PlanItem item : plan.getPlanItems()) {
-            Recipe recipe = item.getRecipe();
-            int portions = item.getPortions();
-            int recipeServings = recipe.getServing();
-
-            for (RecipeIngredient ingredient : recipe.getIngredients()) {
-
-                double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
-
-                ConsumeProductDto dto = createConsumeProductDto(userId, ingredient, realAmountUsed);
-
-                circuitBreakerReturnProduct(dto);
-            }
-        }
-    }
-
     private ConsumeProductDto createConsumeProductDto(int userId, RecipeIngredient ingredient, double realAmountUsed) {
         ConsumeProductDto dto = new ConsumeProductDto();
         dto.setUserId(userId);
@@ -579,34 +607,9 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         return executeWithCircuitBreaker("userService", () -> userClient.getUserRestrictions(userId));
     }
 
-    private void circuitBreakerReturnProduct(ConsumeProductDto product) {
-        executeWithCircuitBreakerVoid(() -> inventoryClient.returnProduct(product));
-    }
-
-    private void circuitBreakerConsumeProduct(ConsumeProductDto product) {
-        executeWithCircuitBreakerVoid(() -> inventoryClient.consumeProduct(product));
-    }
-
     private List<ProductStatusDto> circuitBreakerGenerateShoppingList(List<String> ingredientsNames, int userId) {
 
         return executeWithCircuitBreaker("inventoryService", () -> inventoryClient.generateShoppingList(userId, ingredientsNames));
-    }
-
-    private void executeWithCircuitBreakerVoid(Runnable runnable) {
-        CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker("inventoryService");
-        Runnable decoratedRunnable = CircuitBreaker.decorateRunnable(cb, runnable);
-
-        try {
-            decoratedRunnable.run();
-        } catch (CallNotPermittedException e) {
-            log.warn("Circuit Breaker inventoryService разомкнут. Сервис недоступен");
-            throw new MissingException("InventoryService временно недоступен");
-        } catch (MissingException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Ошибка при вызове сервиса через CB 'inventoryService': {}", e.getMessage(), e);
-            throw new MissingException("Ошибка связи с inventoryService");
-        }
     }
 
     private <T> T executeWithCircuitBreaker(String circuitBreakerName, Supplier<T> supplier) {
