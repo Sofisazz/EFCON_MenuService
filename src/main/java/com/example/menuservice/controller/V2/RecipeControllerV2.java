@@ -8,6 +8,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
@@ -68,5 +69,14 @@ public class RecipeControllerV2 {
     public void DeleteRecipe(@PathVariable int id,
                              @RequestParam(required = false) Integer userId) {
         recipeService.deleteRecipeByIdV2(id, userId);
+    }
+
+
+    @PostMapping("/external")
+    public Page<RecipeDto> findRecipesByIngredients(@RequestParam(value = "offset", defaultValue = "0") @Min(0) Integer offset,
+                                                    @RequestParam(value = "limit", defaultValue = "5") @Min(1) @Max(10) Integer limit,
+                                                    @RequestBody List<String> ingredients,
+                                                    @RequestParam int userId) {
+        return recipeService.findRecipesByIngredientsExternal(ingredients, userId, PageRequest.of(offset, limit));
     }
 }

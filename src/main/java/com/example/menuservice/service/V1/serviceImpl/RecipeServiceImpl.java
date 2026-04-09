@@ -2,7 +2,6 @@ package com.example.menuservice.service.V1.serviceImpl;
 
 import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.mapping.RecipeMapper;
-import com.example.menuservice.entity.EatingPlan;
 import com.example.menuservice.entity.Recipe;
 import com.example.menuservice.exceptions.ExistsException;
 import com.example.menuservice.exceptions.MissingException;
@@ -15,8 +14,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.List;
 
 @RequiredArgsConstructor
 @Service
@@ -62,11 +59,11 @@ public class RecipeServiceImpl implements RecipeService {
     @Transactional
     @Override
     public void deleteRecipeById(int id) {
-        Recipe receivedRecipe = recipeRepository.findById(id)
+        /*Recipe receivedRecipe = recipeRepository.findById(id)
                 .orElseThrow(() -> new MissingException("Рецепт с id '" + id + "' не существует"));
-
-        List<EatingPlan> eatingPlans = receivedRecipe.getEatingPlan();
-        List<String> deletePlans = new ArrayList<>();
+*/
+        //List<EatingPlan> eatingPlans = receivedRecipe.getEatingPlan();
+        /*List<String> deletePlans = new ArrayList<>();
 
         for (EatingPlan plan : eatingPlans) {
             if (plan.getRecipe().equals(receivedRecipe)) {
@@ -76,7 +73,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         if (!deletePlans.isEmpty()) {
             throw new ExistsException("Для удаления рецепта удалите план питания или назначьте другой рецепт " + deletePlans);
-        }
+        }*/
 
         recipeRepository.deleteById(id);
     }

@@ -41,7 +41,7 @@ public class Recipe {
     @ElementCollection
     @CollectionTable(name="recipe_steps", joinColumns = @JoinColumn(name = "recipe_id"))
     @MapKeyColumn(name = "number_step")
-    @Column(name = "description")
+    @Column(name = "description", columnDefinition = "TEXT")
     private Map<Integer, String> steps;
 
     private double caloriesFor100;
