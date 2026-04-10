@@ -168,7 +168,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
         }
         List<RecipeDto> localRecipesDtos = localRecipes.stream().map(recipeMapper::toDto).toList();
 
-        Set<String> commonRecipeIds = null;
+        Set<String> allFoundRecipeIds = new HashSet<>();
         try {
             for (String ing : ingredients) {
                 String translatePrompt = "Translate this food ingredient from Russian to English. Return ONLY the English word. Ingredient: " + ing;
@@ -182,22 +182,17 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
                         .retrieve()
                         .body(JsonNode.class);
 
-                Set<String> currentIngredientRecipeIds = new HashSet<>();
-                if (searchResponse != null && searchResponse.has("meals")) {
-                    for (JsonNode meal : searchResponse.get("meals")) {
-                        String id = meal.path("idMeal").asText();
-                        if (!id.isEmpty()) {
-                            currentIngredientRecipeIds.add(id);
-                        }
-                    }
-                }
-                if (commonRecipeIds == null) {
-                    commonRecipeIds = currentIngredientRecipeIds;
-                } else {
-                    commonRecipeIds.retainAll(currentIngredientRecipeIds);
 
-                    if (commonRecipeIds.isEmpty()) {
-                        break;
+                if (searchResponse != null && searchResponse.has("meals")) {
+                    JsonNode meals = searchResponse.get("meals");
+
+                    if (!meals.isNull()) {
+                        for (JsonNode meal : meals) {
+                            String id = meal.path("idMeal").asText();
+                            if (!id.isEmpty()) {
+                                allFoundRecipeIds.add(id);
+                            }
+                        }
                     }
                 }
             }
@@ -206,13 +201,20 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
             return new PageImpl<>(localRecipesDtos, pageable, localRecipesDtos.size());
         }
 
-        List<String> finalExternalIds = (commonRecipeIds != null) ? new ArrayList<>(commonRecipeIds) : List.of();
+        List<String> finalExternalIds = new ArrayList<>(allFoundRecipeIds);
+
+        int limit = ingredients.size() * 12; // т к долго грузит из-за большого кол-ва рецептов, чтобы было по типу заглушки
+
+        if (finalExternalIds.size() > limit) {
+
+            finalExternalIds = finalExternalIds.subList(0, limit);
+        }
 
         List<RecipeDto> externalRecipesDtos = finalExternalIds.parallelStream()
                 .map(recipeId -> {
                     try {
-                        RecipeDto dto = getExternalRecipes(recipeId, userId);
-                        if (dto != null && recipeContainsAllIngredients(dto, ingredients)) {
+                        RecipeDto dto = getExternalRecipes(recipeId, userId, ingredients);
+                        if (dto != null) {
                             return dto;
                         }
                     } catch (Exception e) {
@@ -420,7 +422,7 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
         return recipeMapper.toDto(existingRecipe);
     }
 
-    private RecipeDto getExternalRecipes(String recipeId, int userId) {
+    private RecipeDto getExternalRecipes(String recipeId, int userId, List<String> requiredIngredients) {
         try {
             JsonNode detailResponse = restClient.get()
                     .uri(urlById + recipeId)
@@ -435,11 +437,6 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
 
             JsonNode mealData = detailResponse.get("meals").get(0);
             String ruName = getNameRecipe(mealData);
-
-            Optional<Recipe> existingRecipeOpt = recipeRepository.findByNameAndOwnerId(ruName, userId);
-            if (existingRecipeOpt.isPresent()) {
-                return recipeMapper.toDto(existingRecipeOpt.get());
-            }
 
             Recipe createdRecipe = new Recipe();
             createdRecipe.setName(ruName);
@@ -459,10 +456,8 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
                     String cleanIngNameRu;
                     try {
 
-                        String translatePrompt = "Translate this food ingredient from English to Russian. Return ONLY the translation, no extra text. Ingredient: " + cleanIngNameEn;
-                        String translated = ollamaService.generateResponse(translatePrompt);
+                        cleanIngNameRu = translateToRussian(cleanIngNameEn);
 
-                        cleanIngNameRu = (translated != null && !translated.isBlank()) ? translated : cleanIngNameEn;
                     } catch (Exception e) {
 
                         cleanIngNameRu = cleanIngNameEn;
@@ -527,8 +522,15 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
                 }
             }
 
-            Recipe savedRecipe = recipeRepository.save(createdRecipe);
-            return recipeMapper.toDto(savedRecipe);
+            RecipeDto tempRecipeDto = recipeMapper.toDto(createdRecipe);
+            if (requiredIngredients.size() != 1) {
+
+                if (!recipeContainsAllIngredients(tempRecipeDto, requiredIngredients)) {
+                    return null;
+                }
+            }
+
+            return tempRecipeDto;
 
         } catch (Exception e) {
             return null;
@@ -646,16 +648,82 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
                 .map(String::toLowerCase)
                 .toList();
 
-        for (String reqIng : requiredIngredients) {
-            String reqIngLower = reqIng.toLowerCase();
+        for (String ruReqIng : requiredIngredients) {
+            String ruReqIngLower = ruReqIng.toLowerCase().trim();
 
-            boolean found = recipeIngNames.stream().anyMatch(name -> name.contains(reqIngLower));
+            boolean found = recipeIngNames.stream().anyMatch(name -> name.contains(ruReqIngLower) || ruReqIngLower.contains(name));
+
+            if (!found) {
+
+                String enReqIng = translateToEnglish(ruReqIng);
+                if (!enReqIng.equals(ruReqIng)) {
+
+                    String enReqIngLower = enReqIng.toLowerCase();
+                    found = recipeIngNames.stream().anyMatch(name -> name.contains(enReqIngLower) || enReqIngLower.contains(name));
+                }
+            }
 
             if (!found) {
               return false;
             }
         }
         return true;
+    }
+
+    private String translateToEnglish(String ruIngredient) {
+        String prompt = """
+            Ты — переводчик кулинарных терминов.
+            Переведи следующий ингредиент с русского на английский.
+            Верни ТОЛЬКО одно слово или фразу на английском, без пояснений, кавычек, точек.
+            
+            Ингредиент: %s
+            
+            Перевод:""".formatted(ruIngredient);
+
+        try {
+            String result = ollamaService.generateResponse(prompt);
+            if (result != null && !result.isBlank()) {
+
+                return result.trim()
+                        .replaceAll("[\"'.,;:!?\\[\\]{}()]", "")
+                        .replaceAll("\\s+", " ");
+            }
+        } catch (Exception e) {
+            log.warn("Ошибка перевода '{}': {}", ruIngredient, e.getMessage());
+        }
+        return ruIngredient;
+    }
+
+    private String translateToRussian(String enIngredient) {
+        String prompt = """
+            Ты — переводчик кулинарных терминов.
+            Переведи следующий ингредиент с английского на русский.
+            Верни ТОЛЬКО одно слово или фразу на русском, без пояснений, кавычек, точек.
+            Если ингредиент не имеет прямого перевода, оставь оригинальное название.
+            
+            Ингредиент: %s
+            
+            Перевод:""".formatted(enIngredient);
+
+        try {
+            String result = ollamaService.generateResponse(prompt);
+            if (result != null && !result.isBlank()) {
+
+                String cleaned = result.trim()
+                        .replaceAll("[\"'.,;:!?\\[\\]{}()]", "")
+                        .replaceAll("\\s+", " ");
+
+                if (cleaned.toLowerCase().matches(".*(system|instruction|mode|user|assistant|prompt|translate|return).*")) {
+
+                    return enIngredient;
+                }
+
+                return cleaned;
+            }
+        } catch (Exception e) {
+            log.warn("Ошибка перевода '{}': {}", enIngredient, e.getMessage());
+        }
+        return enIngredient;
     }
 
     private ProductStatusDto createProductStatusDto(RecipeIngredient ingredient, Measure unit) {
