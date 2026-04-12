@@ -110,28 +110,54 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         receivedEatingPlan.setStatus(Status.CREATED);
         receivedEatingPlan.setUserId(userId);
 
+        Map<String, ProductRequirementDto> totalRequirements = new HashMap<>();
+        List<PlanItem> tempPlanItems = new ArrayList<>();
+
         for (PlanItemDto itemDto : items) {
             Integer recipeId = itemDto.getRecipeId();
+            PlanItem newItem;
 
-            Optional.ofNullable(recipeId)
-                    .orElseThrow(() -> new MissingException("Id рецепта не указан в одном из элементов плана"));
+            if (recipeId != null) {
 
+                Recipe recipe = recipeRepository.findById(recipeId)
+                        .orElseThrow(() -> new MissingException("Рецепт с id '" + recipeId + "' не существует"));
 
-            Recipe recipe = recipeRepository.findById(recipeId)
-                    .orElseThrow(() -> new MissingException("Рецепт с id '" + recipeId + "' не существует"));
+                if (recipe.getOwnerId() != null && !recipe.getOwnerId().equals(userId)) {
+                    throw new MissingException("Рецепт с id '" + recipeId + "' не существует");
+                }
 
-            if (recipe.getOwnerId() != null && !recipe.getOwnerId().equals(userId)) {
-                throw new MissingException("Рецепт с id '" + recipeId + "' не существует");
+                String error = validateRecipe(recipe, userRestrictions);
+                if (!"OK".equals(error)) {
+                    throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
+                }
+
+                collectIngredients(totalRequirements, recipe, itemDto.getPortions(), recipe.getServing());
+
+                newItem = new PlanItem(recipe, itemDto.getPortions());
+            } else if (itemDto.getProductId() != null) {
+
+                Optional.ofNullable(itemDto.getUnit())
+                        .orElseThrow(() -> new MissingException("Для продукта должна быть указана единица измерения"));
+
+                ProductDto product = circuitBreakerGetProductsById(itemDto.getProductId(), userId);
+
+                addProductToRequirements(totalRequirements, product.getName(), itemDto.getPortions(), itemDto.getUnit());
+
+                newItem = new PlanItem(itemDto.getProductId(), itemDto.getUnit(), itemDto.getPortions());
+            } else {
+
+                throw new MissingException("Элемент плана должен содержать либо recipeId, либо productId");
             }
 
-            String error = validateRecipe(recipe, userRestrictions);
-            if (!"OK".equals(error)) {
-                throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
-            }
+            tempPlanItems.add(newItem);
+        }
 
-            checkAvailability(userId, recipe, itemDto.getPortions(), recipe.getServing());
+        checkTotalAvailability(userId, totalRequirements);
 
-            receivedEatingPlan.addPlanItem(recipe, itemDto.getPortions());
+        for (PlanItem tempItem : tempPlanItems) {
+
+            receivedEatingPlan.getPlanItems().add(tempItem);
+            tempItem.setEatingPlan(receivedEatingPlan);
         }
 
         eatingPlanRepository.save(receivedEatingPlan);
@@ -331,15 +357,22 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
     private void subtractIngredientsFromInventory(EatingPlan plan, int userId) {
         for (PlanItem item : plan.getPlanItems()) {
-            Recipe recipe = item.getRecipe();
-            int portions = item.getPortions();
-            int recipeServings = recipe.getServing();
+            if (item.getRecipe() != null) {
+                Recipe recipe = item.getRecipe();
+                int portions = item.getPortions();
+                int recipeServings = recipe.getServing();
 
-            for (RecipeIngredient ingredient : recipe.getIngredients()) {
-                double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+                for (RecipeIngredient ingredient : recipe.getIngredients()) {
+                    double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
 
-                ConsumeProductDto product = createConsumeProductDto(userId, ingredient, realAmountUsed);
-                circuitBreakerConsumeProduct(product);
+                    ConsumeProductDto product = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
+                    circuitBreakerConsumeProduct(product);
+                }
+            } else {
+
+                ConsumeProductDto productDto = createConsumeProductDto(userId, item);
+
+                circuitBreakerConsumeProduct(productDto);
             }
         }
     }
@@ -501,6 +534,108 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         }
     }
 
+    private void collectIngredients(Map<String, ProductRequirementDto> totalRequirements, Recipe recipe, int portions, int servings) {
+        for (RecipeIngredient ingredient : recipe.getIngredients()) {
+
+            double needed = (ingredient.getQuantity() / (double) servings) * portions;
+            addProductToRequirements(totalRequirements, ingredient.getName(), needed, ingredient.getUnit());
+        }
+    }
+
+    private void addProductToRequirements(Map<String, ProductRequirementDto> totalRequirements, String name, double amount, Measure unit) {
+        String key = name.toLowerCase();
+
+        double baseAmount = convertToBase(amount, unit);
+        Measure baseUnit = getBaseUnit(unit);
+
+        if (totalRequirements.containsKey(key)) {
+            ProductRequirementDto requirementProduct = totalRequirements.get(key);
+
+            if (!requirementProduct.getUnit().equals(baseUnit)) {
+
+                throw new IllegalArgumentException("Несовместимые единицы измерения для продукта " + name);
+            }
+
+            requirementProduct.setRequiredAmount(requirementProduct.getRequiredAmount() + baseAmount);
+        } else {
+
+            ProductRequirementDto product = createProductRequirementDto(name, baseAmount, baseUnit);
+            totalRequirements.put(key, product);
+        }
+    }
+
+    private ProductRequirementDto createProductRequirementDto(String name, double needed, Measure unit) {
+        ProductRequirementDto product = new ProductRequirementDto();
+
+        product.setName(name);
+        product.setRequiredAmount(needed);
+        product.setUnit(unit);
+
+        return product;
+    }
+
+    private double convertToBase(double value, Measure unit) {
+        if (unit == null) {
+            return value;
+        }
+
+        return switch (unit) {
+            case KG, L -> value * 1000.0;
+            case TSP -> value * 5.0;
+            case TBSP -> value * 15.0;
+            case CUP -> value * 240.0;
+            default -> value;
+        };
+    }
+
+    private Measure getBaseUnit(Measure unit) {
+        return switch (unit) {
+            case KG, G, TSP, TBSP, CUP, PINCH, PACKET -> Measure.G;
+            case L, ML -> Measure.ML;
+            case PCS -> Measure.PCS;
+        };
+    }
+
+    private void checkTotalAvailability(int userId, Map<String, ProductRequirementDto> totalRequirements) {
+        if (totalRequirements.isEmpty()) {
+            return;
+        }
+
+        List<String> names = totalRequirements.values().stream()
+                .map(ProductRequirementDto::getName)
+                .distinct()
+                .toList();
+
+        List<ProductStatusDto> stockStatuses = circuitBreakerGenerateShoppingList(names, userId);
+
+        for (ProductRequirementDto requirementProduct : totalRequirements.values()) {
+            ProductStatusDto stock = stockStatuses.stream()
+                    .filter(s -> s.getName().equalsIgnoreCase(requirementProduct.getName()))
+                    .findFirst()
+                    .orElse(null);
+
+            Optional.ofNullable(stock)
+                    .orElseThrow(() -> new MissingException("Продукт '" + requirementProduct.getName() + "' недоступен"));
+
+            if (!stock.isAvailable()) {
+
+                throw new MissingException("Продукт '" + requirementProduct.getName() + "' недоступен");
+            }
+
+            if (stock.getAvailableAmount() == 0) {
+
+                throw new MissingException("Продукта '" + requirementProduct.getName() + "' нет на складе");
+            }
+
+            double available = convertAmount(stock.getAvailableAmount(), stock.getUnit(), requirementProduct.getUnit());
+
+            if (available < requirementProduct.getRequiredAmount() - 0.001) {
+
+                throw new MissingException(String.format("Недостаточно продукта '%s' для всего плана. Требуется: %.2f %s, доступно: %.2f %s", requirementProduct.getName(), requirementProduct.getRequiredAmount(), requirementProduct.getUnit(), available, requirementProduct.getUnit()));
+            }
+        }
+    }
+
     private double convertAmount(double amount, Measure from, Measure to) {
         if (from == to) {
             return amount;
@@ -509,29 +644,42 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         double baseAmount;
         switch (from) {
             case L, KG -> baseAmount = amount * 1000.0;
-            case PCS, ML, G -> baseAmount = amount;
+            case TSP -> baseAmount = amount * 5.0;
+            case TBSP -> baseAmount = amount * 15.0;
+            case CUP -> baseAmount = amount * 240.0;
+            case PCS, ML, G, PINCH, PACKET -> baseAmount = amount;
             default -> baseAmount = amount;
         }
 
         switch (to) {
             case L -> {
-                if (from == Measure.KG || from == Measure.G) throw new IllegalArgumentException("Нельзя конвертировать вес в объем");
+                if (isWeight(from)) throw new IllegalArgumentException("Нельзя конвертировать вес в объем");
                 return baseAmount / 1000.0;
             }
             case ML -> {
-                if (from == Measure.KG || from == Measure.G) throw new IllegalArgumentException("Нельзя конвертировать вес в объем");
+                if (isWeight(from)) throw new IllegalArgumentException("Нельзя конвертировать вес в объем");
                 return baseAmount;
             }
             case KG -> {
-                if (from == Measure.L || from == Measure.ML) throw new IllegalArgumentException("Нельзя конвертировать объем в вес");
+                if (isVolume(from)) throw new IllegalArgumentException("Нельзя конвертировать объем в вес");
                 return baseAmount / 1000.0;
             }
             case G -> {
-                if (from == Measure.L || from == Measure.ML) throw new IllegalArgumentException("Нельзя конвертировать объем в вес");
+                if (isVolume(from)) throw new IllegalArgumentException("Нельзя конвертировать объем в вес");
                 return baseAmount;
             }
             case PCS -> {
-                throw new IllegalArgumentException("Нельзя конвертировать вес/объем в штуки");
+                if (isWeight(from) || isVolume(from)) throw new IllegalArgumentException("Нельзя конвертировать вес/объем в штуки");
+                return baseAmount;
+            }
+            case TSP -> {
+                return baseAmount / 5.0;
+            }
+            case TBSP -> {
+                return baseAmount / 15.0;
+            }
+            case CUP -> {
+                return baseAmount / 240.0;
             }
             default -> {
                 return baseAmount;
@@ -539,29 +687,57 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         }
     }
 
+    private boolean isWeight(Measure m) {
+        return m == Measure.G || m == Measure.KG || m == Measure.TSP || m == Measure.TBSP || m == Measure.CUP || m == Measure.PINCH || m == Measure.PACKET;
+    }
+
+    private boolean isVolume(Measure m) {
+        return m == Measure.ML || m == Measure.L;
+    }
+
     private void returnIngredientsToInventory(EatingPlan plan, int userId) {
         for (PlanItem item : plan.getPlanItems()) {
-            Recipe recipe = item.getRecipe();
-            int portions = item.getPortions();
-            int recipeServings = recipe.getServing();
+            if (item.getRecipe() != null) {
+                Recipe recipe = item.getRecipe();
+                int portions = item.getPortions();
+                int recipeServings = recipe.getServing();
 
-            for (RecipeIngredient ingredient : recipe.getIngredients()) {
+                for (RecipeIngredient ingredient : recipe.getIngredients()) {
 
-                double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+                    double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
 
-                ConsumeProductDto dto = createConsumeProductDto(userId, ingredient, realAmountUsed);
+                    ConsumeProductDto dto = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
 
-                circuitBreakerReturnProduct(dto);
+                    circuitBreakerReturnProduct(dto);
+                }
+            } else {
+
+                ConsumeProductDto productDto = createConsumeProductDto(userId, item);
+
+                circuitBreakerReturnProduct(productDto);
             }
         }
     }
 
-    private ConsumeProductDto createConsumeProductDto(int userId, RecipeIngredient ingredient, double realAmountUsed) {
+    private ConsumeProductDto createConsumeRecipeDto(int userId, RecipeIngredient ingredient, double realAmountUsed) {
         ConsumeProductDto dto = new ConsumeProductDto();
         dto.setUserId(userId);
         dto.setProductName(ingredient.getName());
         dto.setAmount(realAmountUsed);
         dto.setUnit(ingredient.getUnit());
+
+        return dto;
+    }
+
+    private ConsumeProductDto createConsumeProductDto(int userId,PlanItem item) {
+        ProductDto product = circuitBreakerGetProductsById(item.getProductId(), userId);
+
+        ConsumeProductDto dto = new ConsumeProductDto();
+        dto.setUserId(userId);
+        dto.setProductId(item.getProductId());
+        dto.setProductName(product.getName());
+        dto.setAmount(item.getPortions());
+        dto.setUnit(item.getUnit());
 
         return dto;
     }
@@ -590,6 +766,10 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
     private List<ProductStatusDto> circuitBreakerGenerateShoppingList(List<String> ingredientsNames, int userId) {
 
         return executeWithCircuitBreaker("inventoryService", () -> inventoryClient.generateShoppingList(userId, ingredientsNames));
+    }
+
+    private ProductDto circuitBreakerGetProductsById(int productId, int userId) {
+        return executeWithCircuitBreaker("inventoryService", () -> inventoryClient.getProductsById(userId, productId));
     }
 
     private void executeWithCircuitBreakerVoid(Runnable runnable) {

@@ -27,13 +27,23 @@ public interface EatingPlanMapper {
     void updateFromDto(EatingPlanDto eatingPlanDto, @MappingTarget EatingPlan eatingPlan);
 
     default List<PlanItemDto> mapPlanItemsToDto(List<PlanItem> planItems) {
-        if (planItems == null) return new ArrayList<>();
+        if (planItems == null) {
+            return new ArrayList<>();
+        }
+
         List<PlanItemDto> dtos = new ArrayList<>();
         for (PlanItem item : planItems) {
+
             PlanItemDto dto = new PlanItemDto();
             if (item.getRecipe() != null) {
+
                 dto.setRecipeId(item.getRecipe().getId());
+            }  else if (item.getProductId() != null) {
+
+                dto.setProductId(item.getProductId());
+                dto.setUnit(item.getUnit());
             }
+
             dto.setPortions(item.getPortions());
             dtos.add(dto);
         }

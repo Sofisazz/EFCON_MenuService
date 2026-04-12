@@ -17,11 +17,15 @@ databaseChangeLog:
               - column:
                   name: recipe_id
                   type: int
-                  constraints:
-                    nullable: false
               - column:
                   name: plan_id
                   type: int
+              - column:
+                  name: product_id
+                  type: int
+              - column:
+                  name: unit
+                  type: varchar(255)
               - column:
                   name: portions
                   type: int

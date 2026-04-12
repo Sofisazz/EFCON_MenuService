@@ -9,4 +9,5 @@ public class ConsumeProductDto {
     private double amount;
     private Measure unit;
     private Integer userId;
+    private Integer productId;
 }

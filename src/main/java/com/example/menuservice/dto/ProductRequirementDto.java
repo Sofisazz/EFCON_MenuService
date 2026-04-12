@@ -4,9 +4,8 @@ import com.example.menuservice.enums.Measure;
 import lombok.Data;
 
 @Data
-public class PlanItemDto {
-    private Integer recipeId;
-    private Integer productId;
+public class ProductRequirementDto {
+    private String name;
+    private double requiredAmount;
     private Measure unit;
-    private int portions;
 }
