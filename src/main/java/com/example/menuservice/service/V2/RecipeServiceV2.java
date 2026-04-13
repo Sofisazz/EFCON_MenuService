@@ -24,4 +24,6 @@ public interface RecipeServiceV2 {
     List<RecipeDto> generateRecipesAccordingRestrictions(PageRequest pageable, int userId);
 
     List<RecipeDto> getRecipesSortedByExpiringIngredients(int userId);
+
+    List<RecipeDto> searchRecipesByName(String name, int userId);
 }

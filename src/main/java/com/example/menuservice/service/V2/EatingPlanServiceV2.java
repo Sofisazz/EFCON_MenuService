@@ -11,7 +11,7 @@ import java.util.List;
 
 
 public interface EatingPlanServiceV2 {
-    EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto);
+    EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto, boolean validate);
     Page<EatingPlanDto> findAllEatingPlansForUser(PageRequest pageable, int userId);
     EatingPlanDto findEatingPlanByIdForUser(int id, int userId);
 

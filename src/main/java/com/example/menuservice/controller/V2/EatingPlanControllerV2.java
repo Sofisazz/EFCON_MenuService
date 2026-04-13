@@ -56,8 +56,9 @@ public class EatingPlanControllerV2 {
 
     @PostMapping()
     public EatingPlanDto createEatingPlan(@Valid @RequestBody EatingPlanDto eatingPlanDto,
-                                          @RequestParam int userId) {
-        return eatingPlanService.createEatingPlanForUser(userId, eatingPlanDto);
+                                          @RequestParam int userId,
+                                          @RequestParam(defaultValue = "true", required = false) boolean validate) {
+        return eatingPlanService.createEatingPlanForUser(userId, eatingPlanDto, validate);
     }
 
     @PutMapping("/{id}")

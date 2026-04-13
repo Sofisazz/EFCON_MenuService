@@ -79,7 +79,7 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
     @Transactional
     @Override
-    public EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto) {
+    public EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto, boolean validate) {
         circuitBreakerUserExists(userId);
 
         EatingType type = eatingPlanDto.getType();
@@ -126,9 +126,11 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
                     throw new MissingException("Рецепт с id '" + recipeId + "' не существует");
                 }
 
-                String error = validateRecipe(recipe, userRestrictions);
-                if (!"OK".equals(error)) {
-                    throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
+                if (validate){
+                    String error = validateRecipe(recipe, userRestrictions);
+                    if (!"OK".equals(error)) {
+                        throw new MissingException("Рецепт '" + recipe.getName() + "' не подходит: " + error);
+                    }
                 }
 
                 collectIngredients(totalRequirements, recipe, itemDto.getPortions(), recipe.getServing());
