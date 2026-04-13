@@ -35,6 +35,7 @@ public interface EatingPlanMapper {
         for (PlanItem item : planItems) {
 
             PlanItemDto dto = new PlanItemDto();
+            dto.setId(item.getId());
             if (item.getRecipe() != null) {
 
                 dto.setRecipeId(item.getRecipe().getId());

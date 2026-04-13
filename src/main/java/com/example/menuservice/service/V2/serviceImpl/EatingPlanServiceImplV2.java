@@ -143,6 +143,13 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
                 ProductDto product = circuitBreakerGetProductsById(itemDto.getProductId(), userId);
 
+                if (validate){
+                    String error = validateProduct(product, userRestrictions);
+                    if (!"OK".equals(error)) {
+                        throw new MissingException("Продукт '" + product.getName() + "' не подходит: " + error);
+                    }
+                }
+
                 addProductToRequirements(totalRequirements, product.getName(), itemDto.getPortions(), itemDto.getUnit());
 
                 newItem = new PlanItem(itemDto.getProductId(), itemDto.getUnit(), itemDto.getPortions());
@@ -357,25 +364,214 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         return newRecipes ;
     }
 
-    private void subtractIngredientsFromInventory(EatingPlan plan, int userId) {
-        for (PlanItem item : plan.getPlanItems()) {
-            if (item.getRecipe() != null) {
-                Recipe recipe = item.getRecipe();
-                int portions = item.getPortions();
-                int recipeServings = recipe.getServing();
+    @Transactional
+    @Override
+    public EatingPlanDto addPlanItemToExistingPlan(int planId, PlanItemDto newItem, int userId, boolean validate) {
+        circuitBreakerUserExists(userId);
 
-                for (RecipeIngredient ingredient : recipe.getIngredients()) {
-                    double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+        EatingPlan plan = eatingPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new MissingException("План с id '" + planId + "' не найден"));
 
-                    ConsumeProductDto product = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
-                    circuitBreakerConsumeProduct(product);
+        if (plan.getStatus().equals(Status.CONSUMED) || plan.getStatus().equals(Status.IN_PROGRESS)) {
+            throw new ExistsException("Нельзя изменить план, который уже готовится или был съеден");
+        }
+
+        UserRestrictionsDto userRestrictions = circuitBreakerGetUserRestrictions(userId);
+
+        PlanItem planItem;
+        if (newItem.getRecipeId() != null) {
+
+            Recipe recipe = recipeRepository.findById(newItem.getRecipeId())
+                    .orElseThrow(() -> new MissingException("Рецепт не найден"));
+
+            if (validate) {
+
+                String error = validateRecipe(recipe, userRestrictions);
+                if (!"OK".equals(error)) {
+
+                    throw new MissingException("Новый рецепт не подходит: " + error);
                 }
+            }
+
+            checkAvailability(userId, recipe, newItem.getPortions(), recipe.getServing());
+            planItem = new PlanItem(recipe, newItem.getPortions());
+        } else if (newItem.getProductId() != null) {
+
+            ProductDto product = circuitBreakerGetProductsById(newItem.getProductId(), userId);
+
+            if (validate) {
+
+                String error = validateProduct(product, userRestrictions);
+                if (!"OK".equals(error)) {
+
+                    throw new MissingException("Новый продукт не подходит: " + error);
+                }
+            }
+
+            checkProductAvailability(userId, product.getName(), newItem.getPortions(), newItem.getUnit());
+            planItem = new PlanItem(newItem.getProductId(), newItem.getUnit(), newItem.getPortions());
+        } else {
+
+            throw new MissingException("Для добавления в прием пищи элемент должен содержать recipeId или productId");
+        }
+
+        planItem.setEatingPlan(plan);
+        plan.getPlanItems().add(planItem);
+
+        eatingPlanRepository.save(plan);
+        subtractIngredientsFromPlanItem(planItem, userId);
+
+        return eatingPlanMapper.toDto(plan);
+    }
+
+    @Transactional
+    @Override
+    public EatingPlanDto updatePlanItem(int planId, int planItemId, PlanItemDto updatedItemDto, int userId, boolean validate) {
+        circuitBreakerUserExists(userId);
+
+        EatingPlan plan = eatingPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new MissingException("План питания с id '" + planId + "' не найден"));
+
+        if (plan.getStatus() == Status.CONSUMED || plan.getStatus() == Status.IN_PROGRESS) {
+            throw new ExistsException("Нельзя изменить план, который уже готовится или был съеден");
+        }
+
+        PlanItem itemToUpdate = plan.getPlanItems().stream()
+                .filter(item -> item.getId() == planItemId)
+                .findFirst()
+                .orElseThrow(() -> new MissingException("Элемент плана с id '" + planItemId + "' не найден в этом плане"));
+
+        UserRestrictionsDto userRestrictions = circuitBreakerGetUserRestrictions(userId);
+
+        Recipe oldRecipe = itemToUpdate.getRecipe();
+        Integer oldProductId = itemToUpdate.getProductId();
+        Measure oldUnit = itemToUpdate.getUnit();
+        int oldPortions = itemToUpdate.getPortions();
+
+        returnIngredientsFromPlanItem(itemToUpdate, userId);
+
+
+
+        try {
+            itemToUpdate.setRecipe(null);
+            itemToUpdate.setProductId(null);
+            itemToUpdate.setUnit(null);
+
+            if (updatedItemDto.getRecipeId() != null) {
+
+                Recipe newRecipe = recipeRepository.findById(updatedItemDto.getRecipeId())
+                        .orElseThrow(() -> new MissingException("Рецепт с id '" + updatedItemDto.getRecipeId() + "' не найден"));
+
+                if (newRecipe.getOwnerId() != null && !newRecipe.getOwnerId().equals(userId)) {
+                    throw new MissingException("Рецепт недоступен");
+                }
+
+                if (validate) {
+
+                    String error = validateRecipe(newRecipe, userRestrictions);
+                    if (!"OK".equals(error)) {
+
+                        throw new MissingException("Новый рецепт не подходит: " + error);
+                    }
+                }
+
+                checkAvailability(userId, newRecipe, updatedItemDto.getPortions(), newRecipe.getServing());
+
+                itemToUpdate.setRecipe(newRecipe);
+                itemToUpdate.setPortions(updatedItemDto.getPortions());
+
+            } else if (updatedItemDto.getProductId() != null) {
+
+                if (updatedItemDto.getUnit() == null) {
+
+                    throw new MissingException("Для продукта должна быть указана единица измерения");
+                }
+
+                ProductDto product = circuitBreakerGetProductsById(updatedItemDto.getProductId(), userId);
+
+                if (validate) {
+
+                    String error = validateProduct(product, userRestrictions);
+                    if (!"OK".equals(error)) {
+
+                        throw new MissingException("Новый продукт не подходит: " + error);
+                    }
+                }
+
+                checkProductAvailability(userId, product.getName(), updatedItemDto.getPortions(), updatedItemDto.getUnit());
+
+                itemToUpdate.setProductId(updatedItemDto.getProductId());
+                itemToUpdate.setUnit(updatedItemDto.getUnit());
+                itemToUpdate.setPortions(updatedItemDto.getPortions());
             } else {
 
-                ConsumeProductDto productDto = createConsumeProductDto(userId, item);
-
-                circuitBreakerConsumeProduct(productDto);
+                throw new MissingException("Элемент должен содержать либо recipeId, либо productId");
             }
+
+            subtractIngredientsFromPlanItem(itemToUpdate, userId);
+        } catch (Exception e) {
+
+            itemToUpdate.setRecipe(oldRecipe);
+            itemToUpdate.setProductId(oldProductId);
+            itemToUpdate.setUnit(oldUnit);
+            itemToUpdate.setPortions(oldPortions);
+
+            subtractIngredientsFromPlanItem(itemToUpdate, userId);
+            throw e;
+        }
+
+        eatingPlanRepository.save(plan);
+
+        return eatingPlanMapper.toDto(plan);
+    }
+
+    @Transactional
+    @Override
+    public void removePlanItem(int planId, int planItemId, int userId) {
+        circuitBreakerUserExists(userId);
+
+        EatingPlan plan = eatingPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new MissingException("План питания с id '" + planId + "' не найден"));
+
+        if (plan.getStatus() == Status.CONSUMED || plan.getStatus() == Status.IN_PROGRESS) {
+            throw new ExistsException("Нельзя изменить план, который уже готовится или был съеден");
+        }
+
+        PlanItem itemToRemove = plan.getPlanItems().stream()
+                .filter(item -> item.getId() == planItemId)
+                .findFirst()
+                .orElseThrow(() -> new MissingException("Элемент плана с id '" + planItemId + "' не найден в этом плане"));
+
+        returnIngredientsFromPlanItem(itemToRemove, userId);
+
+        plan.getPlanItems().remove(itemToRemove);
+
+        eatingPlanRepository.save(plan);
+    }
+
+    private void subtractIngredientsFromInventory(EatingPlan plan, int userId) {
+        for (PlanItem item : plan.getPlanItems()) {
+            subtractIngredientsFromPlanItem(item, userId);
+        }
+    }
+
+    private void subtractIngredientsFromPlanItem(PlanItem item, int userId) {
+        if (item.getRecipe() != null) {
+
+            Recipe recipe = item.getRecipe();
+            int portions = item.getPortions();
+            int recipeServings = recipe.getServing();
+
+            for (RecipeIngredient ingredient : recipe.getIngredients()) {
+
+                double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+                ConsumeProductDto product = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
+                circuitBreakerConsumeProduct(product);
+            }
+        } else if (item.getProductId() != null) {
+
+            ConsumeProductDto productDto = createConsumeProductDto(userId, item);
+            circuitBreakerConsumeProduct(productDto);
         }
     }
 
@@ -498,6 +694,27 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
         return "OK";
     }
 
+    private String validateProduct(ProductDto product, UserRestrictionsDto user) {
+        List<String> ingredients = List.of(product.getName());
+
+        String allergyError = filterAllergy(ingredients, user.getAllergies());
+        if (!allergyError.equals("OK")) {
+            return "Нельзя добавить продукт '" + product.getName() + "'. Причина: " + allergyError;
+        }
+
+        String foodError = filterFoods(ingredients, user.getUnfavoriteFoods());
+        if (!foodError.equals("OK")) {
+            return "Нельзя добавить продукт '" + product.getName() + "'. Причина: " + foodError;
+        }
+
+        String triggerError = filterTriggers(ingredients, user.getFoodTriggers());
+        if (!triggerError.equals("OK")) {
+            return "Нельзя добавить продукт '" + product.getName() + "'. Причина: " + triggerError;
+        }
+
+        return "OK";
+    }
+
 
     private void checkAvailability(int userId, Recipe recipe, int portions, int recipeServings) {
         List<String> ingredients = getIngredientNames(recipe);
@@ -533,6 +750,35 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
             if (availableAmountInRecipeUnit < neededAmount - 0.001) {
                 throw new MissingException(String.format("Недостаточно продукта '" + ingredient.getName() + "'. Требуется: " + neededAmount  + " " + neededUnit + ", доступно: " + availableAmountInRecipeUnit + " " + neededUnit));
             }
+        }
+    }
+
+    private void checkProductAvailability(int userId, String productName, double amount, Measure unit) {
+        List<ProductStatusDto> statusList = circuitBreakerGenerateShoppingList(Collections.singletonList(productName), userId);
+
+        Optional.ofNullable(statusList)
+                .orElseThrow(() -> new MissingException("Невозможно проверить наличие продукта '" + productName + "': сервис склада недоступен"));
+
+        if (statusList.isEmpty()) {
+            throw new MissingException("Невозможно проверить наличие продукта '" + productName + "': сервис склада недоступен");
+        }
+
+        ProductStatusDto stockItem = statusList.stream()
+                .filter(s -> s.getName().equalsIgnoreCase(productName))
+                .findFirst()
+                .orElse(null);
+
+        Optional.ofNullable(stockItem)
+                .orElseThrow(() -> new MissingException("Продукт '" + productName + "' не найден на складе"));
+
+        if (!stockItem.isAvailable()) {
+            throw new MissingException("Продукт '" + productName + "' недоступен: " + (stockItem.getAvailableAmount() == 0 ? "нет на складе" : "истек срок годности"));
+        }
+
+        double availableAmountInTargetUnit = convertAmount(stockItem.getAvailableAmount(), stockItem.getUnit(), unit);
+
+        if (availableAmountInTargetUnit < amount - 0.001) {
+            throw new MissingException(String.format("Недостаточно продукта '%s'. Требуется: %.2f %s, доступно: %.2f %s", productName, amount, unit, availableAmountInTargetUnit, unit));
         }
     }
 
@@ -699,25 +945,26 @@ public class EatingPlanServiceImplV2 implements EatingPlanServiceV2 {
 
     private void returnIngredientsToInventory(EatingPlan plan, int userId) {
         for (PlanItem item : plan.getPlanItems()) {
-            if (item.getRecipe() != null) {
-                Recipe recipe = item.getRecipe();
-                int portions = item.getPortions();
-                int recipeServings = recipe.getServing();
 
-                for (RecipeIngredient ingredient : recipe.getIngredients()) {
+            returnIngredientsFromPlanItem(item, userId);
+        }
+    }
 
-                    double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+    private void returnIngredientsFromPlanItem(PlanItem item, int userId) {
+        if (item.getRecipe() != null) {
+            Recipe recipe = item.getRecipe();
+            int portions = item.getPortions();
+            int recipeServings = recipe.getServing();
 
-                    ConsumeProductDto dto = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
+            for (RecipeIngredient ingredient : recipe.getIngredients()) {
 
-                    circuitBreakerReturnProduct(dto);
-                }
-            } else {
-
-                ConsumeProductDto productDto = createConsumeProductDto(userId, item);
-
-                circuitBreakerReturnProduct(productDto);
+                double realAmountUsed = (ingredient.getQuantity() / recipeServings) * portions;
+                ConsumeProductDto dto = createConsumeRecipeDto(userId, ingredient, realAmountUsed);
+                circuitBreakerReturnProduct(dto);
             }
+        } else if (item.getProductId() != null) {
+            ConsumeProductDto productDto = createConsumeProductDto(userId, item);
+            circuitBreakerReturnProduct(productDto);
         }
     }
 

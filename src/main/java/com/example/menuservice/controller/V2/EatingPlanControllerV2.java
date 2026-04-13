@@ -1,6 +1,7 @@
 package com.example.menuservice.controller.V2;
 
 import com.example.menuservice.dto.EatingPlanDto;
+import com.example.menuservice.dto.PlanItemDto;
 import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.ShoppingListDto;
 import com.example.menuservice.enums.Status;
@@ -84,5 +85,29 @@ public class EatingPlanControllerV2 {
     @GetMapping("/recipes")
     public List<RecipeDto> generateRecipes(@RequestParam int userId) {
         return eatingPlanService.generateRecipes(userId);
+    }
+
+    @PostMapping("/{id}/items")
+    public EatingPlanDto addPlanItem(@PathVariable int id,
+                                     @RequestBody PlanItemDto newItem,
+                                     @RequestParam int userId,
+                                     @RequestParam(defaultValue = "true", required = false) boolean validate) {
+        return eatingPlanService.addPlanItemToExistingPlan(id, newItem, userId, validate);
+    }
+
+    @DeleteMapping("/{planId}/items/{itemId}")
+    public void removePlanItem(@PathVariable int planId,
+                               @PathVariable int itemId,
+                               @RequestParam int userId) {
+        eatingPlanService.removePlanItem(planId, itemId, userId);
+    }
+
+    @PutMapping("/{planId}/items/{itemId}")
+    public EatingPlanDto updatePlanItem(@PathVariable int planId,
+                                        @PathVariable int itemId,
+                                        @RequestParam int userId,
+                                        @RequestBody PlanItemDto newItem,
+                                        @RequestParam(defaultValue = "true", required = false) boolean validate) {
+        return eatingPlanService.updatePlanItem(planId, itemId, newItem, userId, validate);
     }
 }
