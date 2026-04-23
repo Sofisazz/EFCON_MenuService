@@ -132,6 +132,23 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
     }
 
     @Override
+    public List<RecipeDto> searchRecipesByName(String name, int userId) {
+        circuitBreakerUserExists(userId);
+
+        if (name == null || name.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        List<Recipe> recipesLocal = recipeRepository.findByNameContainingIgnoreCaseAndOwnerId(name, userId);
+        List<Recipe> recipesGlobal = recipeRepository.findByNameContainingIgnoreCaseAndOwnerIdIsNull(name);
+
+        List<Recipe> recipes = new ArrayList<>(recipesLocal);
+        recipes.addAll(recipesGlobal);
+
+        return recipes.stream().map(recipeMapper::toDto).toList();
+    }
+
+    @Override
     public ShoppingListDto getShoppingListForRecipe(int recipeId, int userId) {
         circuitBreakerUserExists(userId);
 

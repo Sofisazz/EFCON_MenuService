@@ -69,4 +69,11 @@ public class RecipeControllerV2 {
                              @RequestParam(required = false) Integer userId) {
         recipeService.deleteRecipeByIdV2(id, userId);
     }
+
+    @GetMapping("/search")
+    public List<RecipeDto> searchRecipesByName(@RequestParam String name,
+                                               @RequestParam int userId) {
+
+        return recipeService.searchRecipesByName(name, userId);
+    }
 }

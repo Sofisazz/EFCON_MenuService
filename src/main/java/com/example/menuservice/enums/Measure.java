@@ -8,7 +8,12 @@ public enum Measure {
     L("Литры"),
     KG("Килограммы"),
     G("Граммы"),
-    PCS("Штуки");
+    PCS("Штуки"),
+    TSP("Чайные ложки"),
+    TBSP("Столовые ложки"),
+    PACKET("Пакетик"),
+    PINCH("Щепотки"),
+    CUP("Чашки");
 
     private final String description;
     Measure(String description) {

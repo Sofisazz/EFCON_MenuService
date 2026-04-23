@@ -24,5 +24,9 @@ public interface RecipeRepository extends JpaRepository<Recipe, Integer> {
     boolean existsByNameAndOwnerIdIsNotNull(String name);
 
     List<Recipe> findByOwnerIdIsNullOrOwnerId(int userId);
+
+    List<Recipe> findByNameContainingIgnoreCaseAndOwnerId(String name, int userId);
+
+    List<Recipe> findByNameContainingIgnoreCaseAndOwnerIdIsNull(String name);
 }
 

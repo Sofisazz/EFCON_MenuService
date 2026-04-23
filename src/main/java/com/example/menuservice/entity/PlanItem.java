@@ -1,5 +1,6 @@
 package com.example.menuservice.entity;
 
+import com.example.menuservice.enums.Measure;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -20,8 +21,13 @@ public class PlanItem {
     private EatingPlan eatingPlan;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "recipe_id", nullable = false)
+    @JoinColumn(name = "recipe_id")
     private Recipe recipe;
+
+    private Integer productId;
+
+    @Enumerated(EnumType.STRING)
+    private Measure unit;
 
     @ColumnDefault("1")
     @Column(nullable = false)
@@ -32,5 +38,11 @@ public class PlanItem {
     public PlanItem(Recipe recipe, int portions) {
         this.recipe = recipe;
         this.portions = portions;
+    }
+
+    public PlanItem(Integer productId, Measure unit, int amount) {
+        this.productId = productId;
+        this.unit = unit;
+        this.portions = amount;
     }
 }

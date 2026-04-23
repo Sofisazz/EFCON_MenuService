@@ -1,6 +1,7 @@
 package com.example.menuservice.service.V2;
 
 import com.example.menuservice.dto.EatingPlanDto;
+import com.example.menuservice.dto.PlanItemDto;
 import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.ShoppingListDto;
 import com.example.menuservice.enums.Status;
@@ -11,7 +12,7 @@ import java.util.List;
 
 
 public interface EatingPlanServiceV2 {
-    EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto);
+    EatingPlanDto createEatingPlanForUser(int userId, EatingPlanDto eatingPlanDto, boolean validate);
     Page<EatingPlanDto> findAllEatingPlansForUser(PageRequest pageable, int userId);
     EatingPlanDto findEatingPlanByIdForUser(int id, int userId);
 
@@ -27,4 +28,10 @@ public interface EatingPlanServiceV2 {
     boolean existEatingPlanWithRecipe(int id, int recipeId, int userId);
 
     List<RecipeDto> generateRecipes(int userId);
+
+    EatingPlanDto addPlanItemToExistingPlan(int id, PlanItemDto newItem, int userId, boolean validate);
+
+    EatingPlanDto updatePlanItem(int planId, int planItemId, PlanItemDto updatedItemDto, int userId, boolean validate);
+
+    void removePlanItem(int planId, int planItemId, int userId);
 }
