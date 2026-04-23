@@ -27,5 +27,9 @@ public interface RecipeRepository extends JpaRepository<Recipe, Integer> {
     List<Recipe> findByOwnerIdIsNullOrOwnerId(int userId);
 
     List<Recipe> findByIngredientsNameIgnoreCaseAndOwnerId(String name, int userId);
+
+    List<Recipe> findByNameContainingIgnoreCaseAndOwnerId(String name, int userId);
+
+    List<Recipe> findByNameContainingIgnoreCaseAndOwnerIdIsNull(String name);
 }
 

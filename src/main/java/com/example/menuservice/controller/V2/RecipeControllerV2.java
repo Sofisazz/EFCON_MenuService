@@ -79,4 +79,11 @@ public class RecipeControllerV2 {
                                                     @RequestParam int userId) {
         return recipeService.findRecipesByIngredientsExternal(ingredients, userId, PageRequest.of(offset, limit));
     }
+
+    @GetMapping("/search")
+    public List<RecipeDto> searchRecipesByName(@RequestParam String name,
+                                               @RequestParam int userId) {
+
+        return recipeService.searchRecipesByName(name, userId);
+    }
 }

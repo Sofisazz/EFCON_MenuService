@@ -1,20 +1,14 @@
 package com.example.menuservice.feignclient;
 
-import com.example.menuservice.dto.ConsumeProductDto;
-import com.example.menuservice.dto.ProductAvailabilityDto;
-import com.example.menuservice.dto.ProductStatusDto;
-import com.example.menuservice.dto.TransferProductDto;
+import com.example.menuservice.dto.*;
+import com.example.menuservice.feignclient.configuration.FeignConfig;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@FeignClient(name = "inventory-service")
+@FeignClient(name = "inventory-service", configuration = FeignConfig.class)
 public interface InventoryClient {
-
-    @PostMapping("/api/v2/products/check")
-    List<ProductAvailabilityDto> checkAvailability(@RequestParam Integer userId,
-                                                   @RequestBody List<String> productNames);
 
     @PostMapping("/api/v2/products/shopping-list")
     List<ProductStatusDto> generateShoppingList(@RequestParam Integer userId,
@@ -28,4 +22,8 @@ public interface InventoryClient {
 
     @PostMapping("/api/v2/products/return")
     void returnProduct(@RequestBody ConsumeProductDto dto);
+
+    @GetMapping("/api/v2/products/ids/{id}")
+    ProductDto getProductsById(@RequestParam("userId") int userId,
+                               @PathVariable("id") int productId);
 }

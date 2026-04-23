@@ -28,4 +28,6 @@ public interface RecipeServiceV2 {
     List<RecipeDto> getRecipesSortedByExpiringIngredients(int userId);
 
     Page<RecipeDto> findRecipesByIngredientsExternal(List<String> ingredients, int userId, Pageable pageable);
+
+    List<RecipeDto> searchRecipesByName(String name, int userId);
 }
