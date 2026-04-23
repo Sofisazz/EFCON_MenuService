@@ -2,7 +2,9 @@ package com.example.menuservice.service.V2;
 
 import com.example.menuservice.dto.RecipeDto;
 import com.example.menuservice.dto.ShoppingListDto;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -24,6 +26,8 @@ public interface RecipeServiceV2 {
     List<RecipeDto> generateRecipesAccordingRestrictions(PageRequest pageable, int userId);
 
     List<RecipeDto> getRecipesSortedByExpiringIngredients(int userId);
+
+    Page<RecipeDto> findRecipesByIngredientsExternal(List<String> ingredients, int userId, Pageable pageable);
 
     List<RecipeDto> searchRecipesByName(String name, int userId);
 }

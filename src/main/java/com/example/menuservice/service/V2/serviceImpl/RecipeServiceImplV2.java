@@ -17,15 +17,22 @@ import com.example.menuservice.feignclient.UserClient;
 import com.example.menuservice.map.AllergenMap;
 import com.example.menuservice.repository.PlanItemRepository;
 import com.example.menuservice.repository.RecipeRepository;
+import com.example.menuservice.service.V2.OllamaService;
 import com.example.menuservice.service.V2.RecipeServiceV2;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestClient;
 
 import java.time.LocalDate;
 import java.util.*;
@@ -43,11 +50,25 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
 
     private final InventoryClient inventoryClient;
     private final UserClient userClient;
+    private final RestClient restClient;
 
     private final CircuitBreakerRegistry circuitBreakerRegistry;
 
     private final AllergenMap allergenMap;
 
+    private final OllamaService ollamaService;
+
+    @Value("${themealdb.urlByIngredient}")
+    private String urlByIngredient;
+
+    @Value("${themealdb.urlById}")
+    private String urlById;
+
+    @Value("${calorieninjas.url}")
+    private String calorieUrl;
+
+    @Value("${calorieninjas.key}")
+    private String calorieKey;
 
     @Override
     public List<RecipeDto> getAllRecipes(int userId) {
@@ -129,6 +150,99 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
         recipeDtos = allRecipes.stream().map(recipeMapper::toDto).toList();
 
         return  recipeDtos;
+    }
+
+    @Transactional
+    @Override
+    public Page<RecipeDto> findRecipesByIngredientsExternal(List<String> ingredients, int userId, Pageable pageable) {
+        circuitBreakerUserExists(userId);
+
+        if (ingredients == null || ingredients.isEmpty()) {
+            return Page.empty(pageable);
+        }
+
+        Set<Recipe> localRecipes = new HashSet<>();
+        for (String ing : ingredients) {
+            List<Recipe> foundRecipes = recipeRepository.findByIngredientsNameIgnoreCaseAndOwnerId(ing, userId);
+            localRecipes.addAll(foundRecipes);
+        }
+        List<RecipeDto> localRecipesDtos = localRecipes.stream().map(recipeMapper::toDto).toList();
+
+        Set<String> allFoundRecipeIds = new HashSet<>();
+        try {
+            for (String ing : ingredients) {
+                String translatePrompt = "Translate this food ingredient from Russian to English. Return ONLY the English word. Ingredient: " + ing;
+                String enIng = ollamaService.generateResponse(translatePrompt);
+                if (enIng == null) {
+                    enIng = ing;
+                }
+
+                JsonNode searchResponse = restClient.get()
+                        .uri(urlByIngredient + enIng)
+                        .retrieve()
+                        .body(JsonNode.class);
+
+
+                if (searchResponse != null && searchResponse.has("meals")) {
+                    JsonNode meals = searchResponse.get("meals");
+
+                    if (!meals.isNull()) {
+                        for (JsonNode meal : meals) {
+                            String id = meal.path("idMeal").asText();
+                            if (!id.isEmpty()) {
+                                allFoundRecipeIds.add(id);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+
+            return new PageImpl<>(localRecipesDtos, pageable, localRecipesDtos.size());
+        }
+
+        List<String> finalExternalIds = new ArrayList<>(allFoundRecipeIds);
+
+        int limit = ingredients.size() * 12; // т к долго грузит из-за большого кол-ва рецептов, чтобы было по типу заглушки
+
+        if (finalExternalIds.size() > limit) {
+
+            finalExternalIds = finalExternalIds.subList(0, limit);
+        }
+
+        List<RecipeDto> externalRecipesDtos = finalExternalIds.parallelStream()
+                .map(recipeId -> {
+                    try {
+                        RecipeDto dto = getExternalRecipes(recipeId, userId, ingredients);
+                        if (dto != null) {
+                            return dto;
+                        }
+                    } catch (Exception e) {
+                        log.error("Ошибка при обработке рецепта {}: {}", recipeId, e.getMessage());
+                    }
+                    return null;
+                })
+                .filter(Objects::nonNull)
+                .toList();
+
+        List<RecipeDto> allValidatedDtos = new ArrayList<>(localRecipesDtos);
+        allValidatedDtos.addAll(externalRecipesDtos);
+
+        int totalElements = allValidatedDtos.size();
+        int start = (int) pageable.getOffset();
+
+        int end = Math.min(start + pageable.getPageSize(), totalElements);
+
+        List<RecipeDto> pageContent;
+        if (start >= totalElements) {
+
+            pageContent = Collections.emptyList();
+        } else {
+
+            pageContent = allValidatedDtos.subList(start, end);
+        }
+
+        return new PageImpl<>(pageContent, pageable, totalElements);
     }
 
     @Override
@@ -325,6 +439,310 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
         return recipeMapper.toDto(existingRecipe);
     }
 
+    private RecipeDto getExternalRecipes(String recipeId, int userId, List<String> requiredIngredients) {
+        try {
+            JsonNode detailResponse = restClient.get()
+                    .uri(urlById + recipeId)
+                    .retrieve()
+                    .body(JsonNode.class);
+
+            if (detailResponse == null || !detailResponse.has("meals") || detailResponse.get("meals").isEmpty()) {
+                return null;
+            }
+
+            log.info("Полученный продукт: {}", detailResponse);
+
+            JsonNode mealData = detailResponse.get("meals").get(0);
+            String ruName = getNameRecipe(mealData);
+
+            Recipe createdRecipe = new Recipe();
+            createdRecipe.setName(ruName);
+            createdRecipe.setServing(1);
+            createdRecipe.setOwnerId(userId);
+
+            List<RecipeIngredient> recipeIngredients = new ArrayList<>();
+            StringBuilder queryBuilder = new StringBuilder();
+
+            for (int i = 1; i <= 20; i++) {
+                String rawIng = mealData.path("strIngredient" + i).asText(null);
+                String rawMeasure = mealData.path("strMeasure" + i).asText("");
+
+                if (rawIng != null && !rawIng.trim().isEmpty()) {
+                    String cleanIngNameEn = rawIng.trim();
+
+                    String cleanIngNameRu;
+                    try {
+
+                        cleanIngNameRu = translateToRussian(cleanIngNameEn);
+
+                    } catch (Exception e) {
+
+                        cleanIngNameRu = cleanIngNameEn;
+                    }
+
+                    double quantity = 1.0;
+                    Measure unit = Measure.PCS;
+
+                    if (!rawMeasure.isBlank()) {
+
+                        String lowerMeasure = rawMeasure.toLowerCase().trim();
+                        String[] parts = lowerMeasure.split(" ");
+                        unit = Measure.getMeasure(lowerMeasure);
+                        quantity = calculateQuantity(parts);
+                    }
+
+                    RecipeIngredient recipeIngredient = new RecipeIngredient();
+                    recipeIngredient.setName(cleanIngNameRu);
+                    recipeIngredient.setQuantity(quantity);
+                    recipeIngredient.setUnit(unit);
+                    recipeIngredient.setRecipe(createdRecipe);
+                    recipeIngredients.add(recipeIngredient);
+
+                    String unitApi = (unit != Measure.PCS) ? unit.name().toLowerCase() : "";
+                    queryBuilder.append(quantity).append(" ").append(unitApi).append(" ").append(cleanIngNameEn).append(", ");
+                }
+            }
+
+            createdRecipe.setIngredients(recipeIngredients);
+
+            Map<Integer, String> steps = getSteps(mealData);
+            createdRecipe.setSteps(steps);
+
+            String query = queryBuilder.length() > 2 ? queryBuilder.substring(0, queryBuilder.length() - 2) : "";
+            if (!query.isEmpty()) {
+                try {
+                    JsonNode nutritionResponse = restClient.get()
+                            .uri(calorieUrl + java.net.URLEncoder.encode(query, java.nio.charset.StandardCharsets.UTF_8))
+                            .header("X-Api-Key", calorieKey)
+                            .retrieve()
+                            .body(JsonNode.class);
+
+                    if (nutritionResponse != null && nutritionResponse.has("items")) {
+                        double totalCalories = 0, totalProteins = 0, totalFats = 0, totalCarbs = 0, totalWeight = 0;
+                        for (JsonNode item : nutritionResponse.get("items")) {
+                            totalCalories += item.path("calories").asDouble();
+                            totalProteins += item.path("protein_g").asDouble();
+                            totalFats += item.path("fat_total_g").asDouble();
+                            totalCarbs += item.path("carbohydrates_total_g").asDouble();
+                            totalWeight += item.path("serving_size_g").asDouble();
+                        }
+
+                        if (totalWeight > 0) {
+                            createdRecipe.setCaloriesFor100(Math.round((totalCalories / totalWeight) * 100.0 * 100.0) / 100.0);
+                            createdRecipe.setProteins(Math.round((totalProteins / totalWeight) * 100.0 * 100.0) / 100.0);
+                            createdRecipe.setFats(Math.round((totalFats / totalWeight) * 100.0 * 100.0) / 100.0);
+                            createdRecipe.setCarbohydrates(Math.round((totalCarbs / totalWeight) * 100.0 * 100.0) / 100.0);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Ошибка CalorieNinjas: {}", e.getMessage());
+                }
+            }
+
+            RecipeDto tempRecipeDto = recipeMapper.toDto(createdRecipe);
+            if (requiredIngredients.size() != 1) {
+
+                if (!recipeContainsAllIngredients(tempRecipeDto, requiredIngredients)) {
+                    return null;
+                }
+            }
+
+            return tempRecipeDto;
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String getNameRecipe(JsonNode mealData){
+        String enName = mealData.path("strMeal").asText();
+        String ruName;
+
+        try {
+            String namePrompt = "Translate this food recipe name to Russian. Return ONLY the translation, no extra text: " + enName;
+            ruName = ollamaService.generateResponse(namePrompt);
+            if (ruName == null || ruName.isBlank()) {
+                ruName = enName;
+            }
+        } catch (Exception e) {
+            ruName = enName;
+        }
+
+        return ruName;
+    }
+
+    private double calculateQuantity(String[] parts) {
+        if (parts.length == 0) {
+            return 1.0;
+        }
+
+        String rawNum = parts[0].trim();
+
+        try {
+
+            if (rawNum.contains("/")) {
+                String[] fraction = rawNum.split("/");
+                if (fraction.length == 2) {
+
+                    double numerator = Double.parseDouble(fraction[0].replaceAll("[^0-9.]", ""));
+                    double denominator = Double.parseDouble(fraction[1].replaceAll("[^0-9.]", ""));
+                    if (denominator != 0) {
+                        return numerator / denominator;
+                    }
+                }
+            }
+
+            String cleanNum = rawNum.replaceAll("[^0-9.,]", "");
+
+            cleanNum = cleanNum.replace(",", ".");
+
+            if (!cleanNum.isEmpty()) {
+                return Double.parseDouble(cleanNum);
+            }
+
+        } catch (NumberFormatException e) {
+            log.warn("Не удалось распарсить количество из '{}': {}", rawNum, e.getMessage());
+        }
+
+        return 1.0;
+    }
+
+    private Map<Integer, String> getSteps(JsonNode mealData){
+        String instructionsText = mealData.path("strInstructions").asText("");
+        Map<Integer, String> steps = new LinkedHashMap<>();
+        if (!instructionsText.isBlank()) {
+            String[] rawSteps = instructionsText.split("\\r\\n\\r\\n|\\n\\n|\\r\\n|\\n");
+            int stepNumber = 1;
+
+            StringBuilder allStepsBuilder = new StringBuilder();
+            List<String> stepList = new ArrayList<>();
+            for (String rawStep : rawSteps) {
+                String trimmed = rawStep.trim();
+                if (!trimmed.isEmpty()) {
+                    stepList.add(trimmed);
+                    allStepsBuilder.append(stepNumber++).append(". ").append(trimmed).append("\n");
+                }
+            }
+
+            try {
+                String translateStepsPrompt = "Translate the following cooking steps to Russian. Keep the numbering. Return ONLY the translated text:\n" + allStepsBuilder;
+                String translatedAll = ollamaService.generateResponse(translateStepsPrompt);
+
+                if (translatedAll != null) {
+                    String[] translatedLines = translatedAll.split("\n");
+                    int idx = 0;
+                    for (String line : translatedLines) {
+                        if (!line.trim().isEmpty() && idx < stepList.size()) {
+                            steps.put(idx + 1, line.trim());
+                            idx++;
+                        }
+                    }
+                    while (idx < stepList.size()) {
+                        steps.put(idx + 1, stepList.get(idx));
+                        idx++;
+                    }
+                } else {
+                    throw new Exception("Empty response from Ollama");
+                }
+            } catch (Exception e) {
+                log.warn("Ошибка перевода шагов, используем оригинал: {}", e.getMessage());
+                for (int k = 0; k < stepList.size(); k++) {
+                    steps.put(k + 1, stepList.get(k));
+                }
+            }
+        }
+
+        return steps;
+    }
+
+    private boolean recipeContainsAllIngredients(RecipeDto recipe, List<String> requiredIngredients) {
+        if (recipe.getIngredients() == null) {
+            return false;
+        }
+
+        List<String> recipeIngNames = recipe.getIngredients().stream()
+                .map(RecipeIngredientDto::getName)
+                .map(String::toLowerCase)
+                .toList();
+
+        for (String ruReqIng : requiredIngredients) {
+            String ruReqIngLower = ruReqIng.toLowerCase().trim();
+
+            boolean found = recipeIngNames.stream().anyMatch(name -> name.contains(ruReqIngLower) || ruReqIngLower.contains(name));
+
+            if (!found) {
+
+                String enReqIng = translateToEnglish(ruReqIng);
+                if (!enReqIng.equals(ruReqIng)) {
+
+                    String enReqIngLower = enReqIng.toLowerCase();
+                    found = recipeIngNames.stream().anyMatch(name -> name.contains(enReqIngLower) || enReqIngLower.contains(name));
+                }
+            }
+
+            if (!found) {
+              return false;
+            }
+        }
+        return true;
+    }
+
+    private String translateToEnglish(String ruIngredient) {
+        String prompt = """
+            Ты — переводчик кулинарных терминов.
+            Переведи следующий ингредиент с русского на английский.
+            Верни ТОЛЬКО одно слово или фразу на английском, без пояснений, кавычек, точек.
+            
+            Ингредиент: %s
+            
+            Перевод:""".formatted(ruIngredient);
+
+        try {
+            String result = ollamaService.generateResponse(prompt);
+            if (result != null && !result.isBlank()) {
+
+                return result.trim()
+                        .replaceAll("[\"'.,;:!?\\[\\]{}()]", "")
+                        .replaceAll("\\s+", " ");
+            }
+        } catch (Exception e) {
+            log.warn("Ошибка перевода '{}': {}", ruIngredient, e.getMessage());
+        }
+        return ruIngredient;
+    }
+
+    private String translateToRussian(String enIngredient) {
+        String prompt = """
+            Ты — переводчик кулинарных терминов.
+            Переведи следующий ингредиент с английского на русский.
+            Верни ТОЛЬКО одно слово или фразу на русском, без пояснений, кавычек, точек.
+            Если ингредиент не имеет прямого перевода, оставь оригинальное название.
+            
+            Ингредиент: %s
+            
+            Перевод:""".formatted(enIngredient);
+
+        try {
+            String result = ollamaService.generateResponse(prompt);
+            if (result != null && !result.isBlank()) {
+
+                String cleaned = result.trim()
+                        .replaceAll("[\"'.,;:!?\\[\\]{}()]", "")
+                        .replaceAll("\\s+", " ");
+
+                if (cleaned.toLowerCase().matches(".*(system|instruction|mode|user|assistant|prompt|translate|return).*")) {
+
+                    return enIngredient;
+                }
+
+                return cleaned;
+            }
+        } catch (Exception e) {
+            log.warn("Ошибка перевода '{}': {}", enIngredient, e.getMessage());
+        }
+        return enIngredient;
+    }
+
     private ProductStatusDto createProductStatusDto(RecipeIngredient ingredient, Measure unit) {
         ProductStatusDto product = new ProductStatusDto();
         product.setName(ingredient.getName());
@@ -360,8 +778,8 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
             }
 
             if (recipeRepository.existsByNameAndOwnerId(name, userId)) {
-                Recipe receivedRecipe = recipeRepository.findByNameAndOwnerId(name, userId);
-                if (receivedRecipe != null && receivedRecipe.getId() != id) {
+                Optional<Recipe> receivedRecipe = recipeRepository.findByNameAndOwnerId(name, userId);
+                if (receivedRecipe.isPresent() && receivedRecipe.get().getId() != id) {
                     throw new UpdateException("У вас уже есть личный рецепт с названием '" + name + "'");
                 }
             }
@@ -507,14 +925,14 @@ public class RecipeServiceImplV2 implements RecipeServiceV2 {
             return decoratedSupplier.get();
         } catch (CallNotPermittedException e) {
 
-            log.warn("Circuit Breaker '{}' разомкнут. Сервис недоступен", circuitBreakerName);
+            RecipeServiceImplV2.log.warn("Circuit Breaker '{}' разомкнут. Сервис недоступен", circuitBreakerName);
             throw new MissingException(circuitBreakerName + " временно недоступен");
         } catch (MissingException e) {
 
             throw e;
         } catch (Exception e) {
 
-            log.error("Ошибка при вызове сервиса через CB '{}': {}", circuitBreakerName, e.getMessage(), e);
+            RecipeServiceImplV2.log.error("Ошибка при вызове сервиса через CB '{}': {}", circuitBreakerName, e.getMessage(), e);
             throw new MissingException("Ошибка связи с " + circuitBreakerName);
         }
     }

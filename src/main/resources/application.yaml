@@ -17,16 +17,17 @@ spring:
     enabled: true
   kafka:
     bootstrap-servers: localhost:9092
-    consumer:
-      auto-offset-reset: earliest
-      group-id: expiring-group-v2
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    acks: all
+    enable-idempotence: true
+    retries: 3
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+    log:
+      cleaner:
+        enable: false
 
 eureka:
   client:
@@ -59,3 +60,15 @@ resilience4j.circuitbreaker:
       baseConfig: default
       waitDurationInOpenState: 15s
       failureRateThreshold: 60
+
+themealdb:
+  urlByIngredient: https://www.themealdb.com/api/json/v1/1/filter.php?i=
+  urlById: https://www.themealdb.com/api/json/v1/1/lookup.php?i=
+
+calorieninjas:
+  url: https://api.calorieninjas.com/v1/nutrition?query=
+  key: YmZpIyj/rzey90GJNqX2rg==RNS9RWUrolSJwILI
+
+ollama:
+  url: http://localhost:11434/api/generate
+  model: llama3.2

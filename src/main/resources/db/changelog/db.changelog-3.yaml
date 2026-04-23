@@ -12,7 +12,7 @@ databaseChangeLog:
                   type: int
               - column:
                   name: description
-                  type: varchar(255)
+                  type: TEXT
               - column:
                   name: number_step
                   type: int
